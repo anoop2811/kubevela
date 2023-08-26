@@ -23,8 +23,10 @@ import (
 	"os"
 
 	"github.com/AlecAivazis/survey/v2"
+	"github.com/gosuri/uitable"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	pkgmulticluster "github.com/kubevela/pkg/multicluster"
@@ -64,6 +66,7 @@ func NewWorkflowCommand(c common.Args, order string, ioStreams cmdutil.IOStreams
 		NewWorkflowRollbackCommand(c, ioStreams, wargs),
 		NewWorkflowLogsCommand(c, ioStreams, wargs),
 		NewWorkflowDebugCommand(c, ioStreams, wargs),
+		NewWorkflowListCommand(c, ioStreams, wargs),
 	)
 	return cmd
 }
@@ -243,6 +246,90 @@ func NewWorkflowDebugCommand(c common.Args, ioStream cmdutil.IOStreams, wargs *W
 	cmd.Flags().StringVarP(&wargs.Type, "type", "t", "", "the type of the resource, support: [app, workflow]")
 	addNamespaceAndEnvArg(cmd)
 	return cmd
+}
+
+func NewWorkflowListCommand(c common.Args, ioStream cmdutil.IOStreams, wargs *WorkflowArgs) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "list",
+		Short:   "List running workflows",
+		Long:    "List running workflows",
+		Example: "vela workflow debug <workflow-name>",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cli, err := c.GetClient()
+			if err != nil {
+				return err
+			}
+			namespace, err := GetFlagNamespaceOrEnv(cmd, c)
+			if err != nil {
+				return err
+			}
+			if AllNamespace {
+				namespace = ""
+			}
+			ctx := context.Background()
+			return printWorkflowList(ctx, cli, namespace, ioStream, wargs)
+		},
+	}
+	cmd.Flags().BoolVarP(&AllNamespace, "all-namespaces", "A", false, "If true, check the specified action in all namespaces.")
+	addNamespaceAndEnvArg(cmd)
+	return cmd
+}
+
+func printWorkflowList(ctx context.Context, c client.Reader, namespace string, ioStream cmdutil.IOStreams, wargs *WorkflowArgs) error {
+	table, err := buildWorkflowListTable(ctx, c, namespace, wargs)
+	if err != nil {
+		return err
+	}
+	ioStream.Info(table.String())
+	return nil
+}
+
+func buildWorkflowListTable(ctx context.Context, c client.Reader, namespace string, wargs *WorkflowArgs) (*uitable.Table, error) {
+	table := newUITable()
+	header := []interface{}{"NAME", "TYPE", "PHASE", "START-TIME", "END-TIME"}
+	if AllNamespace {
+		header = append([]interface{}{"NAMESPACE"}, header...)
+	}
+	table.AddRow(header...)
+	applist := v1beta1.ApplicationList{}
+	if err := c.List(ctx, &applist, client.InNamespace(namespace)); err != nil {
+		if apierrors.IsNotFound(err) {
+			return table, nil
+		}
+		return nil, err
+	}
+
+	for _, a := range applist.Items {
+		status := a.Status.Workflow
+		if a.Status.Workflow != nil {
+			if AllNamespace {
+				table.AddRow(a.Namespace, a.Name, "Application", status.Phase, status.StartTime, status.EndTime)
+			} else {
+				table.AddRow(a.Name, "Application", status.Phase, status.StartTime, status.EndTime)
+			}
+		}
+	}
+
+	wrList := workflowv1alpha1.WorkflowRunList{}
+
+	if err := c.List(ctx, &wrList, client.InNamespace(namespace)); err != nil {
+		if apierrors.IsNotFound(err) {
+			return table, nil
+		}
+		return nil, err
+	}
+
+	for _, w := range wrList.Items {
+		status := w.Status
+		if status.Phase != "" {
+			if AllNamespace {
+				table.AddRow(w.Namespace, w.Name, "WorkflowRun", status.Phase, status.StartTime, status.EndTime)
+			} else {
+				table.AddRow(w.Name, "WorkflowRun", status.Phase, status.StartTime, status.EndTime)
+			}
+		}
+	}
+	return table, nil
 }
 
 // WorkflowArgs is the args for workflow command
