@@ -12,26 +12,51 @@ This KEP proposes a fluent, type-safe Go SDK for consuming KubeVela X-Definition
 2. **Type-safe** parameter validation at compile time
 3. **IDE support** with autocomplete and inline documentation
 4. **Automatic synchronization** with KubeVela core releases
-5. **Custom X-Definition support** - generate SDK from platform-specific definitions
 
 ### Non-Goals
 
-1. Authoring new X-Definitions (covered by defkit KEP)
-2. Multi-language support in initial release (Go only; see [Future Language SDKs](#future-language-sdks))
-3. Runtime CUE evaluation in SDK
-4. Replacing YAML/CUE as valid input formats
+1. Authoring new X-Definitions (covered by [defkit KEP](./kep-defkit.md))
+2. Custom X-Definition SDK generation (covered by [defkit KEP](./kep-defkit.md))
+3. Multi-language support in initial release (Go only; see [Future Work](#future-work))
+4. Runtime CUE evaluation in SDK
+5. Replacing YAML/CUE as valid input formats
+6. Running user Go code in the controller or inside the Kubernetes cluster
+
+### Problems with Current `vela def gen-api`
+
+The existing `vela def gen-api` command has limitations that this KEP addresses:
+
+| Problem                              | Impact                                                |
+| ------------------------------------ | ----------------------------------------------------- |
+| Generated code is thin type wrappers | Users write significant glue code manually            |
+| No union/OneOf support               | Complex CUE patterns can't be represented type-safely |
+| No generated validation              | Errors only surface at controller runtime             |
+| No intermediate representation       | Harder to keep SDK in sync with evolving definitions  |
+| No test generation                   | Users must write all tests from scratch               |
+| No CLI integration                   | Multi-step workflow: generate → build → run → apply   |
+
+**How this KEP addresses each problem:**
+
+| Problem             | Solution                                          |
+| ------------------- | ------------------------------------------------- |
+| Thin wrappers       | Fluent builders with full method chains           |
+| No union support    | Enhanced IR with discriminated union generators   |
+| No validation       | Compile-time type checking + runtime `Validate()` |
+| Difficult sync      | In-repo generation with CI checks                 |
+| No tests            | Auto-generated unit and integration tests         |
+| Multi-step workflow | `vela up -f myapp.go` one-command deployment      |
 
 ### Relationship to Existing SDK Tooling
 
 KubeVela currently provides `vela def gen-api` for generating Go code from definitions. This KEP introduces a new, enhanced SDK generation system. The migration path is:
 
-| Version | `vela def gen-api` (existing) | `vela sdk generate` (new) |
-|---------|-------------------------------|---------------------------|
-| v1.13 and earlier | Stable, recommended | Not available |
-| **v1.14** | Unchanged, continues working | **Introduced as alpha** |
-| v1.x (between v1.14 and v2) | Unchanged, continues working | Matures based on feedback |
-| **v2.0** | **Deprecated** (with migration notice) | **GA (Generally Available)** |
-| v2.x+ | Removed after sufficient adoption | Stable, recommended |
+| Version                     | `vela def gen-api` (existing)          | `vela sdk generate` (new)    |
+| --------------------------- | -------------------------------------- | ---------------------------- |
+| v1.13 and earlier           | Stable, recommended                    | Not available                |
+| **v1.14**                   | Unchanged, continues working           | **Introduced as alpha**      |
+| v1.x (between v1.14 and v2) | Unchanged, continues working           | Matures based on feedback    |
+| **v2.0**                    | **Deprecated** (with migration notice) | **GA (Generally Available)** |
+| v2.x+                       | Removed after sufficient adoption      | Stable, recommended          |
 
 **Migration Commitment:**
 
@@ -48,15 +73,28 @@ KubeVela currently provides `vela def gen-api` for generating Go code from defin
 
 **Key differences between old and new:**
 
-| Aspect | `vela def gen-api` | `vela sdk generate` |
-|--------|-------------------|---------------------|
-| OneOf/union support | Limited | Full discriminated union support |
-| Lifecycle functions | Not supported | `Apply()`, `Validate()`, `Destroy()` |
-| CLI integration | Generate + manual apply | Direct `vela apply myapp.go` |
-| Validation | Runtime only | Compile-time + runtime |
-| Generated tests | No | Yes |
+| Aspect              | `vela def gen-api`      | `vela sdk generate`                  |
+| ------------------- | ----------------------- | ------------------------------------ |
+| OneOf/union support | Limited                 | Full discriminated union support     |
+| Lifecycle functions | Not supported           | `Apply()`, `Validate()`, `Destroy()` |
+| CLI integration     | Generate + manual apply | Direct `vela up -f myapp.go`         |
+| Validation          | Runtime only            | Compile-time + runtime               |
+| Generated tests     | No                      | Yes                                  |
 
 ## Proposal
+
+This KEP introduces two complementary capabilities:
+
+1. **Go SDK as a Library** - Type-safe builders for constructing KubeVela Applications in Go programs
+2. **Go as an Input Language** - Direct deployment from Go source via `vela up -f myapp.go`
+
+The SDK can be used independently as a library (for GitOps, CI/CD pipelines, or custom tooling), or combined with CLI integration for a streamlined developer experience.
+
+---
+
+## Part 1: Go SDK as a Library
+
+This section covers using the Go SDK in any Go program. The SDK provides fluent builders that produce KubeVela Application CRs, which can then be applied via any method (kubectl, client-go, GitOps, etc.).
 
 ### Target Developer Experience
 
@@ -67,6 +105,7 @@ package main
 
 import (
     "github.com/oam-dev/kubevela/pkg/sdk"
+    "github.com/oam-dev/kubevela/pkg/sdk/apis"
     "github.com/oam-dev/kubevela/pkg/sdk/apis/component/webservice"
     "github.com/oam-dev/kubevela/pkg/sdk/apis/trait/scaler"
     "github.com/oam-dev/kubevela/pkg/sdk/apis/policy/topology"
@@ -74,39 +113,42 @@ import (
 )
 
 // Apply returns the Application to deploy
-func Apply() *sdk.Application {
+func Apply() apis.TypedApplication {
     return sdk.NewApplication("my-app").
         Namespace("production").
         Labels(map[string]string{"team": "platform"}).
 
         // Add a webservice component with traits
-        AddComponent(
+        SetComponents(
             webservice.New("frontend").
                 Image("nginx:1.21").
                 Port(80).
                 Replicas(3).
-                AddTrait(scaler.New().Min(2).Max(10)),
+                SetTraits(scaler.New().Min(2).Max(10)),
         ).
 
         // Add deployment policy
-        AddPolicy(
+        SetPolicies(
             topology.New("prod-clusters").
                 Clusters([]string{"cluster-1", "cluster-2"}),
         ).
 
         // Add workflow
-        AddWorkflowStep(
+        SetWorkflowSteps(
             deploy.New("deploy-frontend").
                 Policies([]string{"prod-clusters"}),
         )
 }
 
 // Validate performs custom validation beyond schema checks (optional)
-func Validate(app *sdk.Application) error {
+func Validate(app apis.TypedApplication) error {
     if app.GetNamespace() == "production" {
         for _, c := range app.GetComponentsByType("webservice") {
-            if c.GetReplicas() < 3 {
-                return fmt.Errorf("component %q: production requires at least 3 replicas", c.ComponentName())
+            // Type assertion to access component-specific methods
+            if ws, ok := c.(*webservice.WebserviceSpec); ok {
+                if ws.GetReplicas() < 3 {
+                    return fmt.Errorf("component %q: production requires at least 3 replicas", c.ComponentName())
+                }
             }
         }
     }
@@ -114,7 +156,7 @@ func Validate(app *sdk.Application) error {
 }
 
 // Destroy returns the Application to delete (optional)
-func Destroy() *sdk.Application {
+func Destroy() apis.TypedApplication {
     return sdk.NewApplication("my-app").Namespace("production")
 }
 
@@ -126,11 +168,11 @@ func main() {
 
 **Lifecycle Functions:**
 
-| Function | Required | Purpose |
-|----------|----------|---------|
-| `Apply() *sdk.Application` | Yes | Returns the Application to create/update |
-| `Validate(app *sdk.Application) error` | No | Custom business rules beyond schema validation |
-| `Destroy() *sdk.Application` | No | Returns the Application to delete (for `vela delete`) |
+| Function                                     | Required | Purpose                                               |
+| -------------------------------------------- | -------- | ----------------------------------------------------- |
+| `Apply() apis.TypedApplication`              | Yes      | Returns the Application to create/update              |
+| `Validate(app apis.TypedApplication) error`  | No       | Custom business rules beyond schema validation        |
+| `Destroy() apis.TypedApplication`            | No       | Returns the Application to delete (for `vela delete`) |
 
 **Philosophy: Minimize Side Effects**
 
@@ -143,16 +185,16 @@ We encourage treating `Apply()` as a pure function that produces the same output
 
 ```go
 // ✅ Good: Deterministic, explicit inputs
-func Apply() *sdk.Application {
+func Apply() apis.TypedApplication {
     replicas := getEnvInt("REPLICAS", 3)
     return sdk.NewApplication("my-app").
-        AddComponent(webservice.New("web").Replicas(replicas))
+        SetComponents(webservice.New("web").Replicas(replicas))
 }
 
 // ❌ Avoid: Non-deterministic behavior
-func Apply() *sdk.Application {
+func Apply() apis.TypedApplication {
     return sdk.NewApplication("my-app").
-        AddComponent(webservice.New("web").
+        SetComponents(webservice.New("web").
             Replicas(rand.Intn(10)))  // Random - different output each run
 }
 ```
@@ -161,7 +203,7 @@ func Apply() *sdk.Application {
 
 ```bash
 # vela CLI runs the Go program and applies the output
-$ vela apply myapp.go
+$ vela up -f myapp.go
 
 # Delete using Destroy() lifecycle function
 $ vela delete myapp.go
@@ -176,15 +218,15 @@ SDK code can span multiple files and packages - standard Go project structure is
 
 ```bash
 # Single file
-$ vela apply myapp.go
+$ vela up -f myapp.go
 
 # Directory with multiple files (runs as Go package)
-$ vela apply ./myapp/
+$ vela up -f ./myapp/
 
 # Example project structure
 myapp/
 ├── main.go          # func main() { sdk.RunLifecycle() }
-├── app.go           # func Apply() *sdk.Application
+├── app.go           # func Apply() apis.TypedApplication
 ├── validation.go    # func Validate(app) error
 ├── components/      # Reusable component configurations
 │   ├── frontend.go
@@ -193,6 +235,13 @@ myapp/
 ```
 
 ### Architecture
+
+**Component Locations:**
+
+| Component                              | Location                               | Owner            |
+| -------------------------------------- | -------------------------------------- | ---------------- |
+| Core Go SDK for built-in X-Definitions | `github.com/oam-dev/kubevela/pkg/sdk/` | Core maintainers |
+| Code generator + IR                    | `pkg/definition/gen_sdk/`              | Core maintainers |
 
 The SDK for core definitions lives **inside the KubeVela repository** and is auto-generated as part of the CI/CD pipeline. This ensures:
 
@@ -207,8 +256,8 @@ The SDK for core definitions lives **inside the KubeVela repository** and is aut
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  vela-templates/definitions/          pkg/sdk/                               │
-│  ├── internal/                        ├── apis/                              │
-│  │   ├── component/                   │   ├── component/                     │
+│  ├── internal/                       ├── apis/                              │
+│  │   ├── component/                  │   ├── component/                     │
 │  │   │   ├── webservice.cue  ──────▶ │   │   ├── webservice/                │
 │  │   │   ├── worker.cue              │   │   │   ├── webservice.go (gen)    │
 │  │   │   └── task.cue                │   │   │   ├── types.go (gen)         │
@@ -226,28 +275,13 @@ The SDK for core definitions lives **inside the KubeVela repository** and is aut
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                  Custom SDK Generation (Platform Definitions)                │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
-│  │    Source    │    │   Enhanced   │    │  Go Code     │                   │
-│  │              │    │      IR      │    │  Generator   │                   │
-│  │ • Cluster    │───▶│ • Schema     │───▶│              │──▶ Custom SDK     │
-│  │ • Local CUE  │    │ • CUE Meta   │    │ • Builders   │    (user repo)    │
-│  │ • OCI        │    │ • Relations  │    │ • Types      │                   │
-│  │              │    │ • Validation │    │ • Tests      │                   │
-│  └──────────────┘    └──────────────┘    └──────────────┘                   │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+> **Note:** For platform teams authoring custom X-Definitions, SDK generation for those definitions is covered in the [defkit KEP](./kep-defkit.md). This KEP focuses on consuming the core SDK that ships with KubeVela.
 
 ### Repository Structure for Core SDK
 
-The SDK is generated into the KubeVela main repository. The generation process:
-
-1. **Copies scaffold files** - Core infrastructure (application builder, client, types) from `pkg/definition/gen_sdk/_scaffold/`
-2. **Generates definition-specific code** - Fluent builders and types for each component/trait/policy/workflow-step
+The SDK lives in the KubeVela main repository with a clear separation between **static infrastructure** (checked into git) and **generated code** (rebuilt from definitions):
 
 ```
 github.com/oam-dev/kubevela/
@@ -269,42 +303,39 @@ github.com/oam-dev/kubevela/
 │               └── notification.cue
 │
 ├── pkg/
-│   └── sdk/                            # AUTO-GENERATED SDK
+│   └── sdk/
 │       ├── apis/
 │       │   ├── common/
-│       │   │   ├── application.go      # Application builder (from scaffold)
-│       │   │   └── catalog.go          # Definition catalog (from scaffold)
-│       │   ├── types.go                # Core interfaces (from scaffold)
+│       │   │   ├── application.go      # STATIC: Application builder
+│       │   │   └── catalog.go          # STATIC: Definition registry
+│       │   ├── types.go                # STATIC: Core interfaces
 │       │   │
-│       │   ├── component/              # Generated per component type
+│       │   ├── component/              # GENERATED: per component type
 │       │   │   ├── webservice/
-│       │   │   │   ├── webservice.go           # Fluent builder (generated)
-│       │   │   │   ├── types.go                # Property types (generated)
-│       │   │   │   ├── version.go              # Version metadata (generated)
-│       │   │   │   └── webservice_test.go      # Tests (generated)
+│       │   │   │   ├── webservice.go           # Fluent builder
+│       │   │   │   ├── types.go                # Property types
+│       │   │   │   ├── version.go              # Version metadata
+│       │   │   │   └── webservice_test.go      # Tests
 │       │   │   ├── worker/
 │       │   │   └── task/
 │       │   │
-│       │   ├── trait/
+│       │   ├── trait/                  # GENERATED: per trait type
 │       │   │   ├── scaler/
-│       │   │   │   ├── scaler.go
-│       │   │   │   ├── types.go
-│       │   │   │   └── scaler_test.go
 │       │   │   ├── ingress/
 │       │   │   └── gateway/
 │       │   │
-│       │   ├── policy/
+│       │   ├── policy/                 # GENERATED: per policy type
 │       │   │   └── topology/
 │       │   │
-│       │   └── workflow/
+│       │   └── workflow/               # GENERATED: per workflow step type
 │       │       ├── deploy/
 │       │       └── notification/
 │       │
 │       ├── client/
-│       │   └── client.go               # K8s client wrapper (from scaffold)
+│       │   └── client.go               # STATIC: K8s client wrapper
 │       │
 │       └── util/
-│           └── ptr.go                  # Utilities (from scaffold)
+│           └── ptr.go                  # STATIC: Utilities
 │
 ├── hack/
 │   └── generate-sdk.sh                 # SDK generation script
@@ -314,53 +345,64 @@ github.com/oam-dev/kubevela/
         └── sdk-generate.yaml           # CI workflow for SDK generation
 ```
 
-### Scaffold Files
+### Static vs Generated Files
 
-The scaffold files in `pkg/definition/gen_sdk/_scaffold/` provide the core SDK infrastructure that is **copied** (not generated) during SDK generation. These files are the foundation that generated definition-specific code builds upon.
+The SDK consists of two categories of files:
 
-| File | Purpose |
-|------|---------|
-| `apis/types.go` | Core interfaces (`TypedApplication`, `Component`, `Trait`, `WorkflowStep`, `Policy`) and base structs (`ComponentBase`, `TraitBase`, etc.) that generated builders implement |
-| `apis/common/application.go` | `ApplicationBuilder` - the main fluent builder for constructing Applications. Provides `Name()`, `Namespace()`, `SetComponents()`, `Build()`, `ToYAML()`, `Validate()`, `FromK8sObject()` |
-| `apis/common/catalog.go` | Builder registry - maps definition types to constructors. Generated code registers itself here (e.g., `RegisterComponent("webservice", ...)`) |
-| `client/client.go` | Thin wrapper around `controller-runtime/pkg/client` for K8s CRUD operations (`Get`, `Create`, `Update`, `Delete`, `Patch`). Converts SDK builders to K8s CRs via `app.Build()` |
+**Static files** (checked into git, manually maintained):
 
-**How scaffold and generated code work together:**
+| File                         | Purpose                                                                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `apis/types.go`              | Core interfaces (`TypedApplication`, `Component`, `Trait`, `WorkflowStep`, `Policy`) and base structs                   |
+| `apis/common/application.go` | `ApplicationBuilder` - the main fluent builder for constructing Applications                                            |
+| `apis/common/catalog.go`     | Builder registry - maps definition types to constructors for round-trip conversion                                      |
+
+**Generated files** (rebuilt by `make generate-sdk`):
+
+| Directory Pattern              | Purpose                                                                    |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `apis/component/<name>/`       | Fluent builders and types for each ComponentDefinition                     |
+| `apis/trait/<name>/`           | Fluent builders and types for each TraitDefinition                         |
+| `apis/policy/<name>/`          | Fluent builders and types for each PolicyDefinition                        |
+| `apis/workflow/<name>/`        | Fluent builders and types for each WorkflowStepDefinition                  |
+
+**How static and generated code work together:**
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    Scaffold + Generated Code Relationship                    │
+│                    Static + Generated Code Relationship                     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  SCAFFOLD (copied)                      GENERATED (per definition)           │
-│  ─────────────────                      ──────────────────────────           │
+│  STATIC (in git)                        GENERATED (per definition)           │
+│  ───────────────                        ──────────────────────────           │
 │                                                                              │
 │  types.go                               webservice/webservice.go             │
-│  ├── type Component interface ◄─────── ├── type WebserviceSpec struct       │
+│  ├── type Component interface ◄───────  ├── type WebserviceSpec struct       │
 │  │       Build()                        │       implements Component         │
 │  │       Validate()                     │                                    │
 │  │                                      │                                    │
 │  application.go                         │   webservice.New("name")           │
-│  ├── SetComponents(c ...Component)◄────┼── returns Component interface      │
+│  ├── SetComponents(c ...Component)◄──── ┼── returns Component interface      │
 │  │                                      │                                    │
 │  catalog.go                             │   func init() {                    │
-│  ├── ComponentsBuilders map ◄──────────┼──   RegisterComponent("webservice",│
+│  ├── ComponentsBuilders map ◄────────── ┼──   RegisterComponent("webservice",│
 │  ├── RegisterComponent()                │       fromK8sComponent)            │
-│  │                                      │   }                                │
-│  client/client.go                       │                                    │
-│  ├── Create(app TypedApplication)       │                                    │
-│  │     calls app.Build() ──────────────►│   Build() returns K8s CR           │
-│  │                                      │                                    │
+│                                         │   }                                │
+│                                         │                                    │
+│                                         │   Build() returns K8s CR           │
+│                                         │                                    │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The scaffold provides:
+The static infrastructure provides:
+
 1. **Interfaces** - Contracts that all generated builders must implement
 2. **Application orchestration** - How components, traits, policies, and workflow steps are assembled
 3. **Registry pattern** - How generated code registers itself for discovery (used by `FromK8sObject()`)
-4. **K8s client** - How SDK applications are applied to clusters
 
-### Future Language SDKs
+### Future Work
+
+#### Multi-Language SDKs
 
 The **Go SDK** is in-repo because:
 
@@ -402,51 +444,6 @@ The **Go SDK** is in-repo because:
 | Maintainers   | Core KubeVela team           | Can have language-specific maintainers        |
 | Versioning    | Same as KubeVela version     | Semantic versioning aligned with KubeVela     |
 
-**Generation workflow for other languages:**
-
-```yaml
-# In kubevela-sdk-python/.github/workflows/generate.yaml
-name: Generate Python SDK
-on:
-  workflow_dispatch:
-    inputs:
-      kubevela_version:
-        description: "KubeVela version to generate SDK for"
-        required: true
-
-jobs:
-  generate:
-    steps:
-      - name: Download IR artifacts from KubeVela release
-        run: |
-          curl -L -o ir.json \
-            "https://github.com/oam-dev/kubevela/releases/download/${{ inputs.kubevela_version }}/sdk-ir.json"
-
-      - name: Generate Python SDK from IR
-        run: |
-          vela sdk generate --from-ir ir.json --lang python --output ./kubevela_sdk
-
-      - name: Run Python tests
-        run: pytest tests/
-
-      - name: Publish to PyPI
-        run: python -m twine upload dist/*
-```
-
-**IR artifact publishing (added to KubeVela release process):**
-
-```yaml
-# In kubevela/.github/workflows/release.yaml (addition)
-- name: Generate and publish SDK IR artifact
-  run: |
-    # Generate IR from definitions
-    vela sdk ir-export --from-file ./vela-templates/definitions/internal/... \
-                       --output ./dist/sdk-ir.json
-
-    # Attach to GitHub release
-    gh release upload ${{ github.ref_name }} ./dist/sdk-ir.json
-```
-
 This approach allows:
 
 1. **Language-specific best practices** - Each SDK follows idiomatic patterns for its language
@@ -454,207 +451,95 @@ This approach allows:
 3. **Community ownership** - Language experts can maintain their SDK
 4. **Shared source of truth** - All SDKs generate from the same IR, ensuring consistency
 
-### Lifecycle-Based Deployment
+---
 
-The SDK uses a **lifecycle-based approach** where users define hook functions that `vela` CLI (or `kubectl vela` plugin) invokes. This design:
+## Part 2: Go as an Input Language
 
-- **Eliminates `main()` boilerplate** for standard workflows
-- **Decouples SDK from K8s client versions** - the CLI owns the client, not the SDK
-- **Enables direct deployment** - `vela apply myapp.go` with no intermediate steps
+This section covers using Go source files directly with the `vela` CLI. This builds on Part 1's SDK library to provide a streamlined deployment experience.
 
-#### Lifecycle Functions
+**Prerequisite:** Part 2 requires the Go SDK from Part 1. The CLI integration is optional - users can use the SDK as a pure library without any CLI integration.
 
-```go
-package sdk
+### CLI Commands for Go Source Files
 
-// Lifecycle defines the hooks that vela CLI looks for in user code
-// Users implement these as package-level functions
+The SDK enables using Go source files as a first-class input to KubeVela CLI commands. Users write `package main` with `sdk.RunLifecycle()`:
 
-// Apply returns the application to deploy (required)
-// Called by: vela apply, kubectl vela apply
-type ApplyFunc func() *Application
+#### Commands Supporting Go Input
 
-// Validate performs custom validation after automatic SDK validation (optional)
-// Called by: vela apply, vela validate
-// The app parameter is the result of Apply()
-type ValidateFunc func(app *Application) error
+| Command | Current `-f` | Go Support | Description |
+|---------|--------------|------------|-------------|
+| `vela up -f` | YAML, Appfile | ✅ Add `.go` | Deploy application to cluster |
+| `vela dry-run -f` | YAML | ✅ Add `.go` | Render K8s resources without applying |
+| `vela live-diff -f` | YAML | ✅ Add `.go` | Compare app with cluster state |
 
-// Destroy returns the application to delete (optional)
-// Called by: vela delete
-// If not provided, Apply() is used to identify what to delete
-type DestroyFunc func() *Application
-```
+> **Note:** `vela delete -f` uses `-f` for `--force`, not file input. Deletion uses app name: `vela delete <app-name>`
 
-#### User Code (No `main()` Required)
-
-```go
-package myapp
-
-import (
-    "fmt"
-
-    "github.com/oam-dev/kubevela/pkg/sdk"
-    "github.com/oam-dev/kubevela/pkg/sdk/apis/component/webservice"
-)
-
-// Apply is called by `vela apply myapp.go`
-func Apply() *sdk.Application {
-    return sdk.NewApplication("my-app").
-        Namespace("production").
-        AddComponent(
-            webservice.New("frontend").
-                Image("nginx:1.21").
-                Port(80).
-                Replicas(3),
-        )
-}
-
-// Validate is optional - for custom business rules beyond schema validation
-func Validate(app *sdk.Application) error {
-    if app.GetNamespace() == "production" {
-        for _, c := range app.GetComponentsByType("webservice") {
-            if c.GetReplicas() < 3 {
-                return fmt.Errorf("component %q: production requires at least 3 replicas", c.ComponentName())
-            }
-        }
-    }
-    return nil
-}
-```
-
-#### CLI Invocation
+#### Usage Examples
 
 ```bash
-# Deploy directly - no main(), no YAML intermediate step
-vela apply myapp.go
+# Deploy Go SDK application
+vela up -f myapp.go
 
 # Or via kubectl plugin
-kubectl vela apply myapp.go
+kubectl vela up -f myapp.go
 
-# Validate without deploying
-vela validate myapp.go
+# Dry-run to see rendered K8s resources
+vela dry-run -f myapp.go
 
-# Delete the application
-vela delete myapp.go
+# Compare Go-defined app with what's running in cluster
+vela live-diff -f myapp.go
 
-# Export YAML (for GitOps, review, or debugging)
-vela export myapp.go > app.yaml
+# Validate without deploying (dry-run with offline mode)
+vela dry-run -f myapp.go --offline
 
-# Dry-run to see what would be applied
-vela apply myapp.go --dry-run
+# Delete uses app name (extracted from Apply() when deployed)
+vela delete my-app
 ```
 
-#### Language Detection
+This design:
 
-The CLI determines the input language using:
+- **Uses standard Go tooling** - `go run` under the hood, no interpreters or plugins
+- **Decouples SDK from K8s client versions** - the CLI owns the client, not the SDK
+- **Enables direct deployment** - one command from Go source to cluster
 
-1. **Explicit `--language` flag** (highest priority)
-2. **File extension inference** (fallback)
-3. **Error if ambiguous or unsupported**
+#### Go Input Language Support
+
+The CLI uses extension-based detection, with an explicit `--language` (`-l`) flag to override:
 
 ```bash
-# Explicit language specification
-vela apply myapp.go --language=go
-vela apply myapp.py --language=python
-vela apply app.cue --language=cue        # CUE is the default for .cue files
+# Extension-based detection
+vela up -f myapp.go                       # Infers Go from .go extension
+vela up -f ./myapp/                       # Go package directory
+vela up -f app.yaml                       # YAML Application CR (current behavior)
 
-# Extension-based inference (default behavior)
-vela apply myapp.go                       # Infers Go from .go extension
-vela apply myapp.py                       # Infers Python from .py extension
-vela apply app.yaml                       # Infers YAML/manifest
-vela apply app.cue                        # Infers CUE (default)
-
-# Override inference when extension is misleading
-vela apply app.txt --language=cue         # Treat .txt as CUE
+# Explicit language flag (overrides detection)
+vela up -f myapp -l go                    # Force Go interpretation
+vela up -f myapp --language=go            # Long form
 ```
 
-**Supported languages and extensions (source files only):**
+**Language detection precedence:**
 
-| Language | Extension | Runtime Required | Status |
-|----------|-----------|------------------|--------|
-| CUE | `.cue` | None (built into vela) | Current default |
-| YAML | `.yaml`, `.yml` | None | Passthrough |
-| Go | `.go` | Go toolchain | Phase 1 |
-| Python | `.py` | Python 3.x | Future |
-| TypeScript | `.ts` | Node.js + ts-node | Future |
+1. Explicit `--language` / `-l` flag (highest priority)
+2. File extension (`.go` → Go, `.yaml`/`.yml` → YAML)
+3. Default: YAML (maintains backward compatibility)
 
-> **Note:** Binary/compiled artifacts (Go binaries, JARs, etc.) are not supported in the initial release. Users must provide source files. Binary support may be added in a future phase based on community feedback.
+> **Note:** The current `vela up -f` supports YAML Application CRs and legacy Appfile format. CUE is used for X-Definitions (ComponentDefinition, TraitDefinition, etc.), not for application deployment files.
 
-**Runtime requirements:**
+**Requirements (for Go sources):**
 
-```bash
-# Go source files require Go toolchain
-$ vela apply myapp.go
-Error: Go toolchain not found
-  Install Go from https://go.dev/dl/
-  Required: go 1.21 or later
-
-# Python source files require Python runtime (future)
-$ vela apply myapp.py
-Error: Python runtime not found
-  Install Python from https://python.org/
-  Required: python 3.9 or later
-```
+- Go toolchain 1.21+ installed and in PATH
+- Source must be `package main` with `func main()` calling `sdk.RunLifecycle()`
 
 **Error handling:**
 
 ```bash
-# Unknown extension without --language flag
-$ vela apply myapp.xyz
-Error: unable to determine language for "myapp.xyz"
-  Supported extensions: .cue, .yaml, .yml, .go
-  Use --language=<lang> to specify explicitly
+# Go toolchain not found
+$ vela up -f myapp.go
+Error: Go toolchain not found. Install from https://go.dev/dl/ (requires 1.21+)
 
-# Explicit language doesn't match content
-$ vela apply myapp.go --language=cue
-Error: failed to parse "myapp.go" as CUE
-  File appears to be Go source code
-  Did you mean: vela apply myapp.go --language=go
-
-# Go file missing Apply() function
-$ vela apply broken.go
-Error: "broken.go" does not export an Apply() function
-  Go SDK files must export: func Apply() *sdk.Application
-
-# Syntax error in Go file
-$ vela apply invalid.go
+# Compilation error
+$ vela up -f invalid.go
 Error: failed to compile "invalid.go"
   invalid.go:15:5: undefined: webservice
-  Hint: missing import "github.com/oam-dev/kubevela/pkg/sdk/apis/component/webservice"?
-```
-
-**Language detection flow:**
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  vela apply <file> [--language=<lang>]                                       │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  1. Check --language flag                                                    │
-│     ├── If set → use specified language                                     │
-│     └── If not set → continue to step 2                                     │
-│                                                                              │
-│  2. Infer from file extension (source files only)                           │
-│     ├── .cue        → CUE                                                   │
-│     ├── .yaml/.yml  → YAML manifest                                         │
-│     ├── .go         → Go SDK (requires Go toolchain)                        │
-│     ├── .py         → Python SDK (requires Python, future)                  │
-│     ├── .ts         → TypeScript SDK (requires Node, future)                │
-│     └── unknown     → Error: "use --language to specify"                    │
-│                                                                              │
-│  3. Check runtime availability                                               │
-│     ├── Go  → check `go version`                                            │
-│     ├── Python → check `python3 --version`                                  │
-│     ├── TypeScript → check `node --version` + `npx ts-node --version`       │
-│     └── Missing runtime → Error with install instructions                   │
-│                                                                              │
-│  4. Compile/interpret source file                                            │
-│     ├── Success → continue to validation                                    │
-│     └── Failure → Error with helpful message                                │
-│           - Show syntax/compilation errors                                   │
-│           - For Go: check for Apply() function                              │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 #### Go Execution Mechanism
@@ -663,7 +548,7 @@ The `vela` CLI executes Go SDK source files using `go run`:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  vela apply myapp.go                                                         │
+│  vela up -f myapp.go                                                         │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  1. Verify Go toolchain is available                                         │
@@ -683,15 +568,17 @@ The `vela` CLI executes Go SDK source files using `go run`:
 ```
 
 This approach:
+
 - Uses the standard Go toolchain - no custom interpreters or plugins
 - Matches patterns used by Pulumi, CDK, and Terraform providers
 - Allows users to run `go run myapp.go | kubectl apply -f -` independently
 - Works with any IDE, debugger, and standard Go testing
 
 **Requirements:**
+
 - Go toolchain (1.21+) installed and in PATH
 - User code must be `package main` with `func main()` calling `sdk.RunLifecycle()`
-- Must define `func Apply() *sdk.Application`
+- Must define `func Apply() apis.TypedApplication`
 - `go.mod` must exist (CLI can initialize if missing)
 
 #### Execution Model: Compile-Time, Not Runtime
@@ -710,7 +597,7 @@ This approach:
 │       │                                     │                                │
 │       ▼                                     │                                │
 │   ┌─────────────┐                           │                                │
-│   │ vela apply  │  (compiles Go,            │                                │
+│   │ vela up -f  │  (compiles Go,            │                                │
 │   │             │   executes Apply())       │                                │
 │   └─────────────┘                           │                                │
 │       │                                     │                                │
@@ -729,32 +616,34 @@ This approach:
 
 **What this means:**
 
-| Aspect | Behavior |
-|--------|----------|
-| Go code execution | Runs **locally** on developer machine via `vela` CLI |
-| What's sent to cluster | Only the **Application CR** (YAML/JSON) - no Go code |
-| Controller's role | Evaluates **CUE templates** from X-Definitions, not Go |
-| Runtime evaluation | CUE templates are evaluated by controller; Go is already done |
+| Aspect                 | Behavior                                                      |
+| ---------------------- | ------------------------------------------------------------- |
+| Go code execution      | Runs **locally** on developer machine via `vela` CLI          |
+| What's sent to cluster | Only the **Application CR** (YAML/JSON) - no Go code          |
+| Controller's role      | Evaluates **CUE templates** from X-Definitions, not Go        |
+| Runtime evaluation     | CUE templates are evaluated by controller; Go is already done |
 
-**Comparison with CUE workflow:**
+**Comparison of input formats:**
 
 ```
-Traditional CUE:     app.cue  ──► vela CLI ──► Application CR ──► Controller ──► K8s Resources
+Current (YAML):      app.yaml ──► vela CLI ──► Application CR ──► Controller ──► K8s Resources
                                     │
-                                    └── CUE evaluated here OR by controller (depends on command)
+                                    └── YAML parsed directly into CR
 
-Go SDK:              myapp.go ──► vela CLI ──► Application CR ──► Controller ──► K8s Resources
+New (Go SDK):        myapp.go ──► vela CLI ──► Application CR ──► Controller ──► K8s Resources
                                     │
-                                    └── Go compiled & executed HERE (never reaches cluster)
+                                    └── Go compiled & executed HERE (produces CR, never reaches cluster)
 ```
+
+> **Note:** CUE is used by X-Definitions (ComponentDefinition, TraitDefinition, etc.) to define templates, not by end-user application files. The controller evaluates CUE templates from definitions when processing the Application CR.
 
 #### Execution Lifecycle
 
-When `vela apply myapp.go` is executed:
+When `vela up -f myapp.go` is executed:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  vela apply myapp.go                                                         │
+│  vela up -f myapp.go                                                         │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │  LOCAL EXECUTION (on developer machine / CI)                                 │
@@ -762,8 +651,8 @@ When `vela apply myapp.go` is executed:
 │                                                                              │
 │  1. COMPILE & EXECUTE GO CODE                                                │
 │     ─────────────────────────                                                │
-│     - Compile myapp.go (Go plugin or yaegi interpreter)                     │
-│     - Call Apply() → *sdk.Application (in-memory data structure)            │
+│     - Execute via `go run myapp.go` (standard Go toolchain)                 │
+│     - User's main() calls sdk.RunLifecycle() which calls Apply()           │
 │     - Go code runs HERE, not on cluster                                     │
 │                                                                              │
 │  2. AUTOMATIC VALIDATION (SDK validates all components/traits/policies)     │
@@ -817,7 +706,7 @@ When `vela apply myapp.go` is executed:
 #### CLI Output
 
 ```bash
-$ vela apply myapp.go
+$ vela up -f myapp.go
 Loading myapp.go...
 Validating...
   ✓ Application "my-app"
@@ -829,7 +718,7 @@ Validating...
 Applying to namespace "production"...
   ✓ Application "my-app" created
 
-$ vela apply broken.go
+$ vela up -f broken.go
 Loading broken.go...
 Validating...
   ✗ Component "frontend" (webservice): image is required
@@ -885,88 +774,40 @@ func main() {
 }
 ```
 
-This approach gives power users full control while keeping the common case (`vela apply myapp.go`) simple.
+This approach gives power users full control while keeping the common case (`vela up -f myapp.go`) simple.
 
 #### Design Benefits
 
-| Concern | Solution |
-|---------|----------|
-| K8s version compatibility | `vela` CLI owns the K8s client, not the SDK |
-| Simple UX | `vela apply myapp.go` - one command, no intermediate steps |
-| GitOps support | `vela export myapp.go > app.yaml` for manifest-based workflows |
-| Testability | `Apply()` is a pure function returning data - easy to unit test |
-| Power users | Can write `main()` and manage client themselves |
-| Multi-language | Same lifecycle pattern works for Python, TypeScript SDKs |
+| Concern                   | Solution                                                                    |
+| ------------------------- | --------------------------------------------------------------------------- |
+| K8s version compatibility | `vela` CLI owns the K8s client, not the SDK                                 |
+| Simple UX                 | `vela up -f myapp.go` - one command, no intermediate steps                  |
+| GitOps support            | `vela export myapp.go > app.yaml` for manifest-based workflows              |
+| Testability               | `Apply()` returns data (encouraged to be deterministic) - easy to unit test |
+| Power users               | Can write `main()` and manage client themselves                             |
+| Multi-language            | Same lifecycle pattern works for Python, TypeScript SDKs                    |
+
+---
+
+## SDK Generation Infrastructure
+
+The following sections describe the code generation system that powers both the library (Part 1) and CLI integration (Part 2).
 
 ### Intermediate Representation (IR)
 
 The IR captures schema information beyond what OpenAPI provides. Standard OpenAPI generation loses CUE-specific constructs like conditional requirements, closed structs, and discriminated unions. Our enhanced IR preserves this metadata to generate more accurate Go code with proper validation.
 
-```go
-// pkg/definition/gen_sdk/ir/definition.go
+**Key IR types:**
 
-type DefinitionIR struct {
-    Name        string            `json:"name"`
-    Type        DefinitionType    `json:"type"` // component, trait, policy, workflow-step
-    Description string            `json:"description"`
-    Version     string            `json:"version"`
-    Labels      map[string]string `json:"labels"`
-    Annotations map[string]string `json:"annotations"`
-    Properties  *PropertySchema   `json:"properties"`
+| Type                     | Purpose                                                   |
+| ------------------------ | --------------------------------------------------------- |
+| `DefinitionIR`           | Root structure with name, type, version, and properties   |
+| `PropertySchema`         | Field schema with validation constraints and CUE metadata |
+| `ConditionalRequirement` | Captures `if parameter.x { field: type }` patterns        |
+| `OneOfVariant`           | Represents discriminated union variants                   |
+| `DiscriminatorInfo`      | Maps discriminator values to variant types                |
 
-    // Relationships (for traits)
-    AppliesToWorkloads []string  `json:"appliesToWorkloads,omitempty"`
-    ConflictsWith      []string  `json:"conflictsWith,omitempty"`
-
-    // Version tracking for compatibility checks
-    DefinitionHash string           `json:"definitionHash"`
-    Source         DefinitionSource `json:"source"`
-}
-
-type PropertySchema struct {
-    Type        string                     `json:"type"`
-    Description string                     `json:"description"`
-    Required    bool                       `json:"required"`
-    Default     interface{}                `json:"default,omitempty"`
-    Properties  map[string]*PropertySchema `json:"properties,omitempty"`
-    Items       *PropertySchema            `json:"items,omitempty"`
-    Enum        []interface{}              `json:"enum,omitempty"`
-
-    // Validation constraints
-    Min       *int   `json:"min,omitempty"`
-    Max       *int   `json:"max,omitempty"`
-    MinLength *int   `json:"minLength,omitempty"`
-    MaxLength *int   `json:"maxLength,omitempty"`
-    Pattern   string `json:"pattern,omitempty"`
-
-    // CUE-specific metadata (preserved from source)
-    // These enable accurate validation that OpenAPI alone cannot express
-    ClosedStruct          bool                       `json:"closedStruct,omitempty"`
-    ConditionallyRequired []ConditionalRequirement   `json:"conditionallyRequired,omitempty"`
-    OneOfVariants         []OneOfVariant             `json:"oneOfVariants,omitempty"`
-    Discriminator         *DiscriminatorInfo         `json:"discriminator,omitempty"`
-}
-
-// ConditionalRequirement captures CUE patterns like:
-// if parameter.type == "pvc" { claimName: string }
-type ConditionalRequirement struct {
-    Condition string   `json:"condition"` // e.g., "type == 'pvc'"
-    Required  []string `json:"required"`  // fields required when condition is true
-}
-
-// OneOfVariant represents a variant in a discriminated union
-type OneOfVariant struct {
-    Name       string          `json:"name"`
-    Schema     *PropertySchema `json:"schema"`
-    Identifier string          `json:"identifier,omitempty"` // discriminator value
-}
-
-// DiscriminatorInfo captures which field determines the variant
-type DiscriminatorInfo struct {
-    PropertyName string            `json:"propertyName"`
-    Mapping      map[string]string `json:"mapping"` // value -> variant name
-}
-```
+See [Appendix A](#appendix-a-complete-ir-struct-definitions) for complete struct definitions.
 
 ### Generated Code Structure
 
@@ -1059,6 +900,14 @@ func (w *WebserviceSpec) Replicas(replicas int) *WebserviceSpec {
     return w
 }
 
+// GetReplicas returns the replicas value (0 if not set)
+func (w *WebserviceSpec) GetReplicas() int {
+    if w.Properties.Replicas == nil {
+        return 0
+    }
+    return *w.Properties.Replicas
+}
+
 func (w *WebserviceSpec) Cpu(cpu string) *WebserviceSpec {
     w.Properties.Cpu = &cpu
     return w
@@ -1069,9 +918,9 @@ func (w *WebserviceSpec) Memory(memory string) *WebserviceSpec {
     return w
 }
 
-// AddTrait adds a trait with compatibility validation
-func (w *WebserviceSpec) AddTrait(trait apis.Trait) *WebserviceSpec {
-    w.Base.Traits = append(w.Base.Traits, trait)
+// SetTraits sets traits with compatibility validation (variadic)
+func (w *WebserviceSpec) SetTraits(traits ...apis.Trait) *WebserviceSpec {
+    w.Base.Traits = append(w.Base.Traits, traits...)
     return w
 }
 
@@ -1135,6 +984,165 @@ func (s *ScalerSpec) CompatibleWorkloads() []string {
 }
 ```
 
+### Workflow DAG Support
+
+The SDK fully supports KubeVela's DAG-based workflow execution model, including step dependencies, conditional execution, data passing between steps, timeouts, and sub-steps.
+
+**WorkflowStepBase fields (from existing scaffold):**
+
+```go
+type WorkflowStepBase struct {
+    Name      string
+    Type      string
+    Meta      *common.WorkflowStepMeta
+    SubSteps  []WorkflowStep          // Nested steps for step-groups
+    If        string                   // Conditional execution expression
+    Timeout   string                   // Step timeout (e.g., "5m", "1h")
+    DependsOn []string                 // DAG dependencies - step names
+    Inputs    common.StepInputs        // Data inputs from other steps
+    Outputs   common.StepOutputs       // Data outputs for downstream steps
+}
+```
+
+**DAG Example with Dependencies:**
+
+```
+Execution Order (DAG):
+
+  ┌──────────────┐
+  │  deploy-api  │  (no dependencies - runs first)
+  └──────┬───────┘
+         │
+         ▼
+  ┌──────────────┐
+  │  run-tests   │  (depends on deploy-api)
+  └──────┬───────┘
+         │
+         ▼
+  ┌───────────────┐
+  │ deploy-worker │  (depends on run-tests, conditional)
+  └──────┬────────┘
+         │
+         ▼
+  ┌─────────────────┐
+  │ notify-complete │  (depends on deploy-api AND deploy-worker)
+  └─────────────────┘
+```
+
+```go
+func Apply() apis.TypedApplication {
+    return sdk.NewApplication("multi-stage-deploy").
+        Namespace("production").
+        SetComponents(
+            webservice.New("api").Image("myapp/api:v1"),
+            webservice.New("worker").Image("myapp/worker:v1"),
+        ).
+        SetWorkflowSteps(
+            // Step 1: Deploy API first (no DependsOn = runs immediately)
+            deploy.New("deploy-api").
+                Components([]string{"api"}).
+                Policies([]string{"prod-topology"}),
+
+            // Step 2: Run integration tests after API is ready
+            webhook.New("run-tests").
+                Url("https://ci.example.com/trigger").
+                DependsOn([]string{"deploy-api"}),
+
+            // Step 3: Deploy worker only if tests pass
+            deploy.New("deploy-worker").
+                Components([]string{"worker"}).
+                Policies([]string{"prod-topology"}).
+                DependsOn([]string{"run-tests"}).
+                If("status.run-tests.phase == succeeded"),
+
+            // Step 4: Send notification (fan-in: waits for multiple steps)
+            notification.New("notify-complete").
+                SetSlack(notification.SlackWith{
+                    Url:     notification.SlackUrlValue("https://hooks.slack.com/..."),
+                    Message: notification.SlackMessage{Text: "Deployment complete"},
+                }).
+                DependsOn([]string{"deploy-api", "deploy-worker"}),
+        )
+}
+```
+
+**Generated YAML (workflow section):**
+
+```yaml
+spec:
+  workflow:
+    steps:
+      - name: deploy-api
+        type: deploy
+        properties:
+          components: ["api"]
+          policies: ["prod-topology"]
+
+      - name: run-tests
+        type: webhook
+        dependsOn: ["deploy-api"]          # DAG ordering
+        properties:
+          url: "https://ci.example.com/trigger"
+
+      - name: deploy-worker
+        type: deploy
+        dependsOn: ["run-tests"]           # DAG ordering
+        if: "status.run-tests.phase == succeeded"  # Conditional
+        properties:
+          components: ["worker"]
+          policies: ["prod-topology"]
+
+      - name: notify-complete
+        type: notification
+        dependsOn: ["deploy-api", "deploy-worker"]  # Fan-in
+        properties:
+          slack:
+            url:
+              value: "https://hooks.slack.com/..."
+            message:
+              text: "Deployment complete"
+```
+
+**Data Passing Between Steps (Inputs/Outputs):**
+
+```go
+// Step outputs data
+backup.New("create-backup").
+    Outputs(common.StepOutputs{
+        {Name: "backupId", ValueFrom: "output.backupId"},
+    })
+
+// Downstream step consumes it
+restore.New("verify-restore").
+    DependsOn([]string{"create-backup"}).
+    Inputs(common.StepInputs{
+        {From: "backupId", ParameterKey: "sourceBackup"},
+    })
+```
+
+**Step Groups with Sub-Steps:**
+
+```go
+// Parallel execution within a step group
+stepgroup.New("parallel-deploy").
+    SetSubSteps(
+        deploy.New("deploy-region-us").
+            Components([]string{"api"}).
+            Policies([]string{"us-topology"}),
+        deploy.New("deploy-region-eu").
+            Components([]string{"api"}).
+            Policies([]string{"eu-topology"}),
+    )
+```
+
+**Timeout and Conditional Execution:**
+
+```go
+deploy.New("canary-deploy").
+    Timeout("30m").                              // Fail if not complete in 30 min
+    If("context.namespace == 'production'")     // Only run in production
+```
+
 ### Discriminated Union (OneOf) Handling
 
 CUE definitions often use discriminated unions with `close({...}) | close({...})` patterns. The SDK generates type-safe union types with:
@@ -1144,150 +1152,7 @@ CUE definitions often use discriminated unions with `close({...}) | close({...})
 3. **Typed accessors** - Methods to safely extract the underlying variant
 4. **JSON marshaling** - Custom serialization matching CUE's output format
 
-**Generated code for specific union types:**
-
-```go
-// Example: Generated from notification.cue lark.url field
-// CUE: url: close({ value: string }) | close({ secretRef: { name: string, key: string } })
-
-// --- Variant Enum (type-safe variant identification) ---
-
-type LarkUrlVariant string
-
-const (
-    LarkUrlVariantUnset     LarkUrlVariant = ""
-    LarkUrlVariantValue     LarkUrlVariant = "value"
-    LarkUrlVariantSecretRef LarkUrlVariant = "secretRef"
-)
-
-// AllLarkUrlVariants returns all valid variants (useful for validation/docs)
-func AllLarkUrlVariants() []LarkUrlVariant {
-    return []LarkUrlVariant{LarkUrlVariantValue, LarkUrlVariantSecretRef}
-}
-
-// --- Variant types (internal, not directly constructed by users) ---
-
-type larkUrlValue struct {
-    Value string `json:"value"`
-}
-
-type larkUrlSecretRef struct {
-    Name string `json:"name"`
-    Key  string `json:"key"`
-}
-
-// --- Union Type ---
-
-// LarkUrl is a discriminated union type
-type LarkUrl struct {
-    variant LarkUrlVariant
-    value   any
-}
-
-// --- Variant Constructors (package-level functions) ---
-
-// LarkUrlValue creates a LarkUrl with a direct value
-func LarkUrlValue(v string) LarkUrl {
-    return LarkUrl{variant: LarkUrlVariantValue, value: larkUrlValue{Value: v}}
-}
-
-// LarkUrlSecretRef creates a LarkUrl with a secret reference
-func LarkUrlSecretRef(name, key string) LarkUrl {
-    return LarkUrl{variant: LarkUrlVariantSecretRef, value: larkUrlSecretRef{Name: name, Key: key}}
-}
-
-// --- Typed Accessors (avoid raw `any` in user code) ---
-
-// Variant returns which variant is set (typed enum, not string)
-func (u LarkUrl) Variant() LarkUrlVariant { return u.variant }
-
-// IsSet returns true if a variant has been selected
-func (u LarkUrl) IsSet() bool { return u.variant != LarkUrlVariantUnset }
-
-// IsValue returns true if this is the "value" variant
-func (u LarkUrl) IsValue() bool { return u.variant == LarkUrlVariantValue }
-
-// IsSecretRef returns true if this is the "secretRef" variant
-func (u LarkUrl) IsSecretRef() bool { return u.variant == LarkUrlVariantSecretRef }
-
-// AsValue returns the value if this is a "value" variant
-func (u LarkUrl) AsValue() (string, bool) {
-    if u.variant != LarkUrlVariantValue {
-        return "", false
-    }
-    v, ok := u.value.(larkUrlValue)
-    return v.Value, ok
-}
-
-// AsSecretRef returns the secret reference if this is a "secretRef" variant
-func (u LarkUrl) AsSecretRef() (name string, key string, ok bool) {
-    if u.variant != LarkUrlVariantSecretRef {
-        return "", "", false
-    }
-    v, ok := u.value.(larkUrlSecretRef)
-    return v.Name, v.Key, ok
-}
-
-// --- Validation ---
-
-func (u LarkUrl) Validate() error {
-    switch u.variant {
-    case LarkUrlVariantUnset:
-        return errors.New("LarkUrl: no variant selected")
-    case LarkUrlVariantValue, LarkUrlVariantSecretRef:
-        return nil
-    default:
-        return fmt.Errorf("LarkUrl: unknown variant %q", u.variant)
-    }
-}
-
-// --- JSON Marshaling (matches CUE output format) ---
-
-func (u LarkUrl) MarshalJSON() ([]byte, error) {
-    switch u.variant {
-    case LarkUrlVariantValue:
-        v, _ := u.value.(larkUrlValue)
-        return json.Marshal(map[string]any{"value": v.Value})
-    case LarkUrlVariantSecretRef:
-        s, _ := u.value.(larkUrlSecretRef)
-        return json.Marshal(map[string]any{
-            "secretRef": map[string]string{"name": s.Name, "key": s.Key},
-        })
-    default:
-        return nil, fmt.Errorf("LarkUrl: unknown variant %q", u.variant)
-    }
-}
-
-func (u *LarkUrl) UnmarshalJSON(data []byte) error {
-    var raw map[string]json.RawMessage
-    if err := json.Unmarshal(data, &raw); err != nil {
-        return err
-    }
-
-    if v, ok := raw["value"]; ok {
-        var val string
-        if err := json.Unmarshal(v, &val); err != nil {
-            return err
-        }
-        *u = LarkUrlValue(val)
-        return nil
-    }
-
-    if s, ok := raw["secretRef"]; ok {
-        var ref struct {
-            Name string `json:"name"`
-            Key  string `json:"key"`
-        }
-        if err := json.Unmarshal(s, &ref); err != nil {
-            return err
-        }
-        *u = LarkUrlSecretRef(ref.Name, ref.Key)
-        return nil
-    }
-
-    return errors.New("LarkUrl: no recognized variant in JSON")
-}
-```
+See [Appendix B](#appendix-b-complete-oneof-implementation) for the complete generated code example.
 
 **Usage:**
 
@@ -1332,17 +1197,17 @@ if larkConfig.Url.IsSecretRef() {
 
 **Design Rationale:**
 
-| Concern | Solution |
-|---------|----------|
-| Variant identification | Typed enum (`LarkUrlVariant`) instead of raw strings; enables exhaustive switch checking |
+| Concern                | Solution                                                                                   |
+| ---------------------- | ------------------------------------------------------------------------------------------ |
+| Variant identification | Typed enum (`LarkUrlVariant`) instead of raw strings; enables exhaustive switch checking   |
 | Type safety with `any` | Internal variant types are unexported; users interact via typed constructors and accessors |
-| API ergonomics | Package-level constructor functions + `IsX()` boolean helpers for simple checks |
-| JSON serialization | Custom `MarshalJSON`/`UnmarshalJSON` matching CUE's discriminated union format |
-| IDE discoverability | Enum constants, constructor functions, and accessor methods all appear in autocomplete |
+| API ergonomics         | Package-level constructor functions + `IsX()` boolean helpers for simple checks            |
+| JSON serialization     | Custom `MarshalJSON`/`UnmarshalJSON` matching CUE's discriminated union format             |
+| IDE discoverability    | Enum constants, constructor functions, and accessor methods all appear in autocomplete     |
 
 ### Validation Lifecycle
 
-Validation occurs **automatically** when using `vela apply` (see [Lifecycle-Based Deployment](#lifecycle-based-deployment)). For power users writing custom `main()`, the `Validate()` method can be called at various points:
+Validation occurs **automatically** when using `vela up -f` (see [Lifecycle-Based Deployment](#lifecycle-based-deployment)). For power users writing custom `main()`, the `Validate()` method can be called at various points:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -1351,7 +1216,7 @@ Validation occurs **automatically** when using `vela apply` (see [Lifecycle-Base
 │                                                                              │
 │  CLI-DRIVEN (recommended - validation is automatic)                          │
 │  ─────────────────────────────────────────────────                           │
-│  $ vela apply myapp.go      ◄── Automatic: SDK validation + custom Validate()│
+│  $ vela up -f myapp.go      ◄── Automatic: SDK validation + custom Validate()│
 │  $ vela validate myapp.go   ◄── Validation only, no apply                   │
 │                                                                              │
 │  PROGRAMMATIC (for custom main() users)                                      │
@@ -1398,13 +1263,13 @@ func (a *ApplicationBuilder) Validate() error {
 
 **When validation runs:**
 
-| Entry Point | SDK Validation | Custom Validate() | Behavior on Error |
-|-------------|----------------|-------------------|-------------------|
-| `vela apply myapp.go` | Automatic | Automatic (if defined) | Stops, no apply |
-| `vela validate myapp.go` | Automatic | Automatic (if defined) | Reports error |
-| `app.Validate()` | Yes | No (call separately) | Returns error |
-| `app.Build()` | Yes | No | Returns `(Application, error)` |
-| `app.ToYAML()` | Yes | No | Returns `(string, error)` |
+| Entry Point              | SDK Validation | Custom Validate()      | Behavior on Error              |
+| ------------------------ | -------------- | ---------------------- | ------------------------------ |
+| `vela up -f myapp.go`    | Automatic      | Automatic (if defined) | Stops, no apply                |
+| `vela validate myapp.go` | Automatic      | Automatic (if defined) | Reports error                  |
+| `app.Validate()`         | Yes            | No (call separately)   | Returns error                  |
+| `app.Build()`            | Yes            | No                     | Returns `(Application, error)` |
+| `app.ToYAML()`           | Yes            | No                     | Returns `(string, error)`      |
 
 **Custom validation (for business rules):**
 
@@ -1412,12 +1277,15 @@ User-defined `Validate(app)` function runs **after** automatic SDK validation pa
 
 ```go
 // In myapp.go - this is called by vela CLI after SDK validation
-func Validate(app *sdk.Application) error {
+func Validate(app apis.TypedApplication) error {
     // Custom business rules beyond schema validation
     if app.GetNamespace() == "production" {
         for _, c := range app.GetComponentsByType("webservice") {
-            if c.GetReplicas() < 3 {
-                return fmt.Errorf("component %q: production requires at least 3 replicas", c.ComponentName())
+            // Type assertion to access component-specific methods
+            if ws, ok := c.(*webservice.WebserviceSpec); ok {
+                if ws.GetReplicas() < 3 {
+                    return fmt.Errorf("component %q: production requires at least 3 replicas", c.ComponentName())
+                }
             }
         }
     }
@@ -1497,28 +1365,20 @@ comp := webservice.New("app").
 
 ### SDK Generation Commands
 
+The core SDK is generated from definitions in the KubeVela repository. These commands are primarily used by KubeVela maintainers:
+
 ```bash
-# Generate SDK from cluster definitions (default namespace)
-vela sdk generate --from-cluster --output ./sdk
+# Generate SDK from local definition files (in-repo workflow)
+vela sdk generate --from-file ./vela-templates/definitions/*.cue --output ./pkg/sdk/apis
 
-# Generate from specific namespace
-vela sdk generate --from-cluster --namespace platform-defs --output ./sdk
-
-# Generate from local CUE files
-vela sdk generate --from-file ./definitions/*.cue --output ./sdk
-
-# Generate from OCI registry
-vela sdk generate --from-oci oci://registry.example.com/platform/defs:v1.0 --output ./sdk
-
-# Generate from KubeVela release (for core definitions)
-vela sdk generate --from-release v1.9.0 --output ./sdk
+# Generate from a specific KubeVela release tag
+vela sdk generate --from-release v1.14.0 --output ./sdk
 
 # Include only specific definition types
-vela sdk generate --from-cluster --types component,trait --output ./sdk
-
-# Generate with custom package name
-vela sdk generate --from-cluster --package myplatform/sdk --output ./sdk
+vela sdk generate --from-file ./definitions/*.cue --types component,trait --output ./sdk
 ```
+
+> **Note:** For generating SDKs from custom X-Definitions (cluster-based, OCI registry, or platform-specific definitions), see the [defkit KEP](./kep-defkit.md).
 
 ## In-Repo SDK Generation and CI/CD
 
@@ -1782,84 +1642,14 @@ var _ = Describe("Webservice Component", func() {
 
 #### Test Generation Template
 
-The generator uses templates to create tests:
+The generator uses Go text/template files to create component tests. Templates generate:
 
-```go
-// pkg/definition/gen_sdk/templates/component_test.go.tmpl
+- Builder tests for required field validation
+- Optional field acceptance tests
+- Validation constraint tests (min/max/pattern)
+- Build output verification tests
 
-package {{.PackageName}}_test
-
-import (
-    "testing"
-
-    . "github.com/onsi/ginkgo/v2"
-    . "github.com/onsi/gomega"
-
-    "{{.ImportPath}}"
-)
-
-func Test{{.TypeName}}(t *testing.T) {
-    RegisterFailHandler(Fail)
-    RunSpecs(t, "{{.TypeName}} Component SDK Suite")
-}
-
-var _ = Describe("{{.TypeName}} Component", func() {
-
-    Describe("Builder", func() {
-        It("should create a valid component with required fields", func() {
-            comp := {{.PackageName}}.New("test").
-                {{range .RequiredFields}}{{.SetterName}}({{.ExampleValue}}).
-                {{end}}
-
-            Expect(comp.ComponentName()).To(Equal("test"))
-            err := comp.Validate()
-            Expect(err).NotTo(HaveOccurred())
-        })
-
-        {{range .RequiredFields}}
-        It("should fail validation when required field '{{.Name}}' is missing", func() {
-            comp := {{$.PackageName}}.New("test")
-            {{range $.RequiredFields}}{{if ne .Name $.Name}}.{{.SetterName}}({{.ExampleValue}}){{end}}{{end}}
-
-            err := comp.Validate()
-            Expect(err).To(HaveOccurred())
-            Expect(err.Error()).To(ContainSubstring("{{.Name}}"))
-        })
-        {{end}}
-    })
-
-    {{if .OptionalFields}}
-    Describe("Optional Fields", func() {
-        {{range .OptionalFields}}
-        It("should accept optional {{.Name}}", func() {
-            comp := {{$.PackageName}}.New("test").
-                {{range $.RequiredFields}}{{.SetterName}}({{.ExampleValue}}).
-                {{end}}{{.SetterName}}({{.ExampleValue}})
-
-            built := comp.Build()
-            Expect(string(built.Properties.Raw)).To(ContainSubstring(`"{{.JSONName}}"`))
-        })
-        {{end}}
-    })
-    {{end}}
-
-    {{if .ValidationConstraints}}
-    Describe("Validation Constraints", func() {
-        {{range .ValidationConstraints}}
-        It("should validate {{.FieldName}} {{.ConstraintType}}", func() {
-            comp := {{$.PackageName}}.New("test").
-                {{range $.RequiredFields}}{{.SetterName}}({{.ExampleValue}}).
-                {{end}}{{.SetterName}}({{.InvalidValue}})
-
-            err := comp.Validate()
-            Expect(err).To(HaveOccurred())
-            Expect(err.Error()).To(ContainSubstring("{{.FieldName}}"))
-        })
-        {{end}}
-    })
-    {{end}}
-})
-```
+See [Appendix C](#appendix-c-test-generation-template) for the complete template.
 
 ### Integration Test Generation
 
@@ -1889,7 +1679,7 @@ var _ = Describe("Webservice Integration", func() {
 
         app := sdk.NewApplication("test-webservice").
             Namespace(testNamespace).
-            AddComponent(
+            SetComponents(
                 webservice.New("test").
                     Image("nginx:1.21").
                     Port(80),
@@ -1958,17 +1748,17 @@ import (
 module myapp
 
 require (
-    github.com/oam-dev/kubevela v1.9.0  // SDK included
+    github.com/oam-dev/kubevela v1.14.0  // SDK included
 )
 ```
 
 ### SDK Versioning with KubeVela Releases
 
-| KubeVela Version | SDK Version    | Compatibility                        |
-| ---------------- | -------------- | ------------------------------------ |
-| v1.9.0           | v1.9.0 (same)  | Requires KubeVela controller v1.9.0+ |
-| v1.9.1           | v1.9.1 (same)  | Patch release, backwards compatible  |
-| v1.10.0          | v1.10.0 (same) | May have new definitions/fields      |
+| KubeVela Version | SDK Version    | Compatibility                       |
+| ---------------- | -------------- | ----------------------------------- |
+| v1.14.0          | v1.14.0 (same) | Initial SDK release (alpha)         |
+| v1.14.1          | v1.14.1 (same) | Patch release, backwards compatible |
+| v2.0.0           | v2.0.0 (same)  | SDK GA, may have breaking changes   |
 
 **Version guarantees:**
 
@@ -1976,222 +1766,6 @@ require (
 - Patch releases (v1.9.x) are backwards compatible
 - Minor releases (v1.x.0) may add new definitions/fields
 - Major releases may have breaking changes (following semver)
-
-### Custom Definition SDK Workflow
-
-A key question: **How do users get fluent APIs for custom definitions they create?**
-
-The answer is **SDK generation**. The fluent APIs are not manually written - they are generated from the X-Definition's parameter schema.
-
-#### Example: Custom AWS RDS Component
-
-**Step 1: Platform engineer creates the definition (CUE or defkit)**
-
-```cue
-// aws-rds.cue
-"aws-rds": {
-    type: "component"
-    description: "Provision AWS RDS via Crossplane"
-}
-template: {
-    parameter: {
-        engine:        *"postgres" | "mysql" | "mariadb"
-        instanceClass: *"db.t3.micro" | string
-        storageGB:     *20 | int & >=20 & <=65536
-        multiAZ:       *false | bool
-    }
-    output: {
-        apiVersion: "database.aws.crossplane.io/v1beta1"
-        kind:       "DBInstance"
-        // ...
-    }
-}
-```
-
-**Step 2: Apply the definition to the cluster**
-
-```bash
-vela def apply ./aws-rds.cue
-```
-
-**Step 3: Generate SDK including the custom definition**
-
-```bash
-# Generate SDK from cluster (includes both core and custom definitions)
-vela sdk generate --from-cluster --output ./my-sdk --package myplatform/sdk
-```
-
-**Step 4: Use the generated SDK**
-
-```go
-import (
-    sdk "github.com/oam-dev/kubevela/pkg/sdk"
-    "myplatform/sdk/pkg/apis/component/awsrds"  // Generated!
-)
-
-app := sdk.NewApplication("my-app").
-    AddComponent(
-        awsrds.New("production-db").
-            Engine("postgres").           // Generated method
-            InstanceClass("db.t3.large"). // Generated method
-            StorageGB(100).               // Generated method
-            MultiAZ(true),                // Generated method
-    )
-```
-
-#### Generated Code Example
-
-For the `aws-rds` definition above, the generator produces:
-
-```go
-// my-sdk/pkg/apis/component/awsrds/awsrds.go (GENERATED)
-package awsrds
-
-import "myplatform/sdk/pkg/apis"
-
-const AwsRdsType = "aws-rds"
-
-type AwsRdsSpec struct {
-    Base       apis.ComponentBase
-    Properties AwsRdsProperties
-}
-
-type AwsRdsProperties struct {
-    Engine        *string `json:"engine,omitempty"`
-    InstanceClass *string `json:"instanceClass,omitempty"`
-    StorageGB     *int    `json:"storageGB,omitempty"`
-    MultiAZ       *bool   `json:"multiAZ,omitempty"`
-}
-
-func New(name string) *AwsRdsSpec {
-    return &AwsRdsSpec{
-        Base: apis.ComponentBase{Name: name, Type: AwsRdsType},
-    }
-}
-
-func (a *AwsRdsSpec) Engine(engine string) *AwsRdsSpec {
-    a.Properties.Engine = &engine
-    return a
-}
-
-func (a *AwsRdsSpec) InstanceClass(class string) *AwsRdsSpec {
-    a.Properties.InstanceClass = &class
-    return a
-}
-
-func (a *AwsRdsSpec) StorageGB(size int) *AwsRdsSpec {
-    a.Properties.StorageGB = &size
-    return a
-}
-
-func (a *AwsRdsSpec) MultiAZ(enabled bool) *AwsRdsSpec {
-    a.Properties.MultiAZ = &enabled
-    return a
-}
-
-func (a *AwsRdsSpec) Build() common.ApplicationComponent { ... }
-func (a *AwsRdsSpec) Validate() error { ... }
-
-// Auto-registration with namespaced key to avoid conflicts
-func init() {
-    common.RegisterComponent("myplatform/aws-rds", FromComponent)
-}
-```
-
-#### Namespaced Builder Registration
-
-When combining core SDK with custom SDK, builder registration uses namespaced keys to prevent conflicts:
-
-```go
-// Core SDK registers with core.oam.dev namespace
-common.RegisterComponent("core.oam.dev/webservice", FromComponent)
-
-// Custom SDK registers with custom namespace
-common.RegisterComponent("myplatform/webservice", FromComponent)  // Extended version
-common.RegisterComponent("myplatform/aws-rds", FromComponent)
-
-// Lookup checks exact match first, then falls back to short name
-func GetComponentBuilder(typeName string) ComponentBuilder {
-    // Exact match
-    if b, ok := builders[typeName]; ok {
-        return b
-    }
-    // Short name fallback (for backwards compatibility)
-    for k, b := range builders {
-        if strings.HasSuffix(k, "/"+typeName) {
-            return b
-        }
-    }
-    return nil
-}
-```
-
-#### Combining Core and Custom SDKs
-
-Users typically have two SDK sources:
-
-```go
-// go.mod
-module myapp
-
-require (
-    // Core KubeVela SDK (in-repo, matches KubeVela version)
-    github.com/oam-dev/kubevela v1.9.0
-
-    // Custom platform SDK (generated from your definitions)
-    myplatform/sdk v1.2.0
-)
-```
-
-```go
-import (
-    sdk "github.com/oam-dev/kubevela/pkg/sdk"
-
-    // Core definitions (in-repo)
-    "github.com/oam-dev/kubevela/pkg/sdk/apis/component/webservice"
-    "github.com/oam-dev/kubevela/pkg/sdk/apis/trait/scaler"
-
-    // Custom definitions (your platform's generated SDK)
-    "myplatform/sdk/pkg/apis/component/awsrds"
-    "myplatform/sdk/pkg/apis/trait/backup"
-)
-
-app := sdk.NewApplication("my-app").
-    AddComponent(
-        webservice.New("api").Image("myapp:v1"),
-    ).
-    AddComponent(
-        awsrds.New("database").Engine("postgres"),
-    )
-```
-
-#### SDK Regeneration Workflow
-
-When definitions change, regenerate the SDK:
-
-```bash
-# After updating aws-rds.cue and applying it
-vela def apply ./aws-rds.cue
-
-# Regenerate SDK to pick up changes
-vela sdk generate --from-cluster --output ./my-sdk
-
-# Commit and tag the new SDK version
-cd my-sdk
-git add .
-git commit -m "Update SDK for aws-rds v2 changes"
-git tag v1.3.0
-git push --tags
-```
-
-#### Watch Mode for Development
-
-During development, use watch mode to auto-regenerate:
-
-```bash
-# Watch cluster for definition changes, regenerate SDK automatically
-vela sdk develop --from-cluster --output ./my-sdk --watch
-```
 
 ### Versioning Strategy
 
@@ -2215,26 +1789,24 @@ const (
 
 **How it works (same as CUE):**
 
-1. User generates SDK from cluster: `vela sdk generate --from-cluster`
-2. SDK generator reads `ComponentDefinition` and its current `DefinitionRevision`
-3. Generated code includes the revision number for documentation purposes
-4. At runtime, the controller uses the definition currently in the cluster (same as CUE)
+1. SDK is generated from definitions in the KubeVela repository during the build process
+2. Generated code includes the `DefinitionRevision` number for documentation purposes
+3. At runtime, the controller uses the definition currently in the cluster (same as CUE)
 
 **Version alignment:**
 
-1. **Core SDK**: Aligned with KubeVela releases (e.g., `v1.9.0`, `v1.10.0`) - definitions ship with KubeVela
-2. **Custom Definitions**: Regenerate SDK when platform definitions change
+The core SDK is aligned with KubeVela releases (e.g., `v1.14.0`, `v2.0.0`). Users import the SDK matching their cluster version:
 
 ```go
 // go.mod
-module myplatform
+module myapp
 
 require (
-    github.com/oam-dev/kubevela v1.9.0  // Core SDK is in-repo
+    github.com/oam-dev/kubevela v1.14.0  // Core SDK ships with KubeVela
 )
 ```
 
-> **Note:** Unlike CUE where the controller evaluates the definition at runtime, the SDK generates parameter values that the controller validates against the *current* cluster definition. If the definition schema changes incompatibly, the controller will reject the Application with a validation error - the same behavior as submitting stale YAML.
+> **Note:** Unlike CUE where the controller evaluates the definition at runtime, the SDK generates parameter values that the controller validates against the _current_ cluster definition. If the definition schema changes incompatibly, the controller will reject the Application with a validation error - the same behavior as submitting stale YAML.
 
 ### Validation
 
@@ -2256,7 +1828,7 @@ The SDK provides compile-time and runtime validation:
 ```go
 // Validation example
 app := sdk.NewApplication("test").
-    AddComponent(
+    SetComponents(
         webservice.New("frontend"), // Missing Image - caught at runtime
     )
 
@@ -2296,8 +1868,6 @@ type WebserviceProperties struct {
 ### Client Operations
 
 ```go
-// pkg/client/client.go
-
 type Client interface {
     // CRUD operations
     Apply(ctx context.Context, app apis.TypedApplication) error
@@ -2406,14 +1976,14 @@ func BuildApplication(env string) sdk.TypedApplication {
     return sdk.NewApplication("my-app").
         Namespace(env).
         Labels(map[string]string{"team": "platform", "env": env}).
-        AddComponent(
+        SetComponents(
             webservice.New("api").
                 Image("myregistry/api:v1.2.3").
                 Port(8080).
                 Replicas(replicas).
                 Cpu("500m").
                 Memory("512Mi").
-                AddTrait(scaler.New().Min(replicas).Max(replicas * 3)),
+                SetTraits(scaler.New().Min(replicas).Max(replicas * 3)),
         )
 }
 
@@ -2802,7 +2372,7 @@ var _ = Describe("Application Builder", func() {
             It("should fail validation with clear error", func() {
                 // Intentionally create invalid component
                 app := sdk.NewApplication("test").
-                    AddComponent(
+                    SetComponents(
                         webservice.New("bad-component"),
                         // Missing Image() - required field
                     )
@@ -2817,10 +2387,10 @@ var _ = Describe("Application Builder", func() {
         Context("when incompatible trait is added", func() {
             It("should fail validation", func() {
                 app := sdk.NewApplication("test").
-                    AddComponent(
+                    SetComponents(
                         webservice.New("api").
                             Image("nginx").
-                            AddTrait(incompatibleTrait.New()), // Hypothetical incompatible trait
+                            SetTraits(incompatibleTrait.New()), // Hypothetical incompatible trait
                     )
 
                 err := app.Validate()
@@ -2896,7 +2466,7 @@ var _ = Describe("Component Configuration Variations", func() {
     DescribeTable("should validate replicas within bounds",
         func(replicas int, shouldPass bool) {
             app := sdk.NewApplication("test").
-                AddComponent(
+                SetComponents(
                     webservice.New("api").
                         Image("nginx").
                         Replicas(replicas),
@@ -2939,6 +2509,7 @@ import (
 
     "github.com/oam-dev/kubevela-core-api/apis/core.oam.dev/v1beta1"
     sdk "github.com/oam-dev/kubevela/pkg/sdk"
+    "github.com/oam-dev/kubevela/pkg/sdk/apis/common"
     "github.com/oam-dev/kubevela/pkg/sdk/client"
 
     "myproject/internal/apps"
@@ -3005,8 +2576,8 @@ var _ = Describe("Application Deployment", func() {
             err := velaClient.Apply(ctx, app)
             Expect(err).NotTo(HaveOccurred())
 
-            // Modify and re-apply
-            app = app.(*sdk.ApplicationImpl).
+            // Modify and re-apply (TypedApplication is an interface, need type assertion for modification)
+            app = app.(*common.ApplicationBuilder).
                 Labels(map[string]string{"updated": "true"})
 
             err = velaClient.Apply(ctx, app)
@@ -3108,20 +2679,20 @@ import (
 )
 
 // MinimalValidApp creates a minimal valid application for testing
-func MinimalValidApp(name string) sdk.TypedApplication {
+func MinimalValidApp(name string) apis.TypedApplication {
     return sdk.NewApplication(name).
         Namespace("default").
-        AddComponent(
+        SetComponents(
             webservice.New("test-component").
                 Image("nginx:latest"),
         )
 }
 
 // AppWithComponent creates an app with a customizable component
-func AppWithComponent(name string, comp interface{ Build() common.ApplicationComponent }) sdk.TypedApplication {
+func AppWithComponent(name string, comp apis.Component) apis.TypedApplication {
     return sdk.NewApplication(name).
         Namespace("default").
-        AddComponent(comp)
+        SetComponents(comp)
 }
 ```
 
@@ -3242,6 +2813,16 @@ It("should use production config in production", func() {
 })
 ```
 
+## Risks and Mitigations
+
+| Risk                                                       | Mitigation                                                                      |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Go toolchain required for `vela up -f myapp.go`            | Clear error messages with install instructions; YAML remains fully supported    |
+| SDK drift from CUE definitions                             | In-repo generation with CI checks; regenerate on every PR                       |
+| Breaking changes in generated code when definitions change | Semantic versioning; deprecation periods; CI detects compilation failures       |
+| Learning curve for Go SDK users                            | Comprehensive examples; IDE autocomplete; migration guide from YAML             |
+| Maintenance burden of generated code                       | Automated generation; generated tests verify correctness                        |
+
 ## Compatibility
 
 ### Coexistence with Existing Approaches
@@ -3299,11 +2880,12 @@ These versions are enforced by `vela sdk generate` and documented in generated S
 
 ### Phase 3: Advanced Features
 
-- Custom definition SDK generation
-- OCI registry source
-- SDK version management
-- Documentation generation
+- SDK version management and compatibility checking
+- Documentation generation from definition metadata
 - Unknown field preservation for round-trip fidelity
+- Enhanced IDE integration (code actions, quick fixes)
+
+> **Note:** Custom X-Definition SDK generation is covered in the [defkit KEP](./kep-defkit.md).
 
 ### Phase 4: Multi-Language SDKs (Future)
 
@@ -3337,3 +2919,304 @@ OpenAPI generators produce valid code but lack:
 Would require CUE → Protobuf conversion and custom plugins.
 
 **Decision:** Direct Go generation is simpler and sufficient.
+
+---
+
+## Appendices
+
+### Appendix A: Complete IR Struct Definitions
+
+The full Intermediate Representation (IR) struct definitions for SDK generation:
+
+```go
+// pkg/definition/gen_sdk/ir/definition.go
+
+type DefinitionIR struct {
+    Name        string            `json:"name"`
+    Type        DefinitionType    `json:"type"` // component, trait, policy, workflow-step
+    Description string            `json:"description"`
+    Version     string            `json:"version"`
+    Labels      map[string]string `json:"labels"`
+    Annotations map[string]string `json:"annotations"`
+    Properties  *PropertySchema   `json:"properties"`
+
+    // Relationships (for traits)
+    AppliesToWorkloads []string  `json:"appliesToWorkloads,omitempty"`
+    ConflictsWith      []string  `json:"conflictsWith,omitempty"`
+
+    // Version tracking for compatibility checks
+    DefinitionHash string           `json:"definitionHash"`
+    Source         DefinitionSource `json:"source"`
+}
+
+type PropertySchema struct {
+    Type        string                     `json:"type"`
+    Description string                     `json:"description"`
+    Required    bool                       `json:"required"`
+    Default     interface{}                `json:"default,omitempty"`
+    Properties  map[string]*PropertySchema `json:"properties,omitempty"`
+    Items       *PropertySchema            `json:"items,omitempty"`
+    Enum        []interface{}              `json:"enum,omitempty"`
+
+    // Validation constraints
+    Min       *int   `json:"min,omitempty"`
+    Max       *int   `json:"max,omitempty"`
+    MinLength *int   `json:"minLength,omitempty"`
+    MaxLength *int   `json:"maxLength,omitempty"`
+    Pattern   string `json:"pattern,omitempty"`
+
+    // CUE-specific metadata (preserved from source)
+    ClosedStruct          bool                       `json:"closedStruct,omitempty"`
+    ConditionallyRequired []ConditionalRequirement   `json:"conditionallyRequired,omitempty"`
+    OneOfVariants         []OneOfVariant             `json:"oneOfVariants,omitempty"`
+    Discriminator         *DiscriminatorInfo         `json:"discriminator,omitempty"`
+}
+
+// ConditionalRequirement captures CUE patterns like:
+// if parameter.type == "pvc" { claimName: string }
+type ConditionalRequirement struct {
+    Condition string   `json:"condition"` // e.g., "type == 'pvc'"
+    Required  []string `json:"required"`  // fields required when condition is true
+}
+
+// OneOfVariant represents a variant in a discriminated union
+type OneOfVariant struct {
+    Name       string          `json:"name"`
+    Schema     *PropertySchema `json:"schema"`
+    Identifier string          `json:"identifier,omitempty"` // discriminator value
+}
+
+// DiscriminatorInfo captures which field determines the variant
+type DiscriminatorInfo struct {
+    PropertyName string            `json:"propertyName"`
+    Mapping      map[string]string `json:"mapping"` // value -> variant name
+}
+```
+
+### Appendix B: Complete OneOf Implementation
+
+Full discriminated union (OneOf) generated code example:
+
+```go
+// Example: Generated from notification.cue lark.url field
+// CUE: url: close({ value: string }) | close({ secretRef: { name: string, key: string } })
+
+// --- Variant Enum (type-safe variant identification) ---
+
+type LarkUrlVariant string
+
+const (
+    LarkUrlVariantUnset     LarkUrlVariant = ""
+    LarkUrlVariantValue     LarkUrlVariant = "value"
+    LarkUrlVariantSecretRef LarkUrlVariant = "secretRef"
+)
+
+// AllLarkUrlVariants returns all valid variants (useful for validation/docs)
+func AllLarkUrlVariants() []LarkUrlVariant {
+    return []LarkUrlVariant{LarkUrlVariantValue, LarkUrlVariantSecretRef}
+}
+
+// --- Variant types (internal, not directly constructed by users) ---
+
+type larkUrlValue struct {
+    Value string `json:"value"`
+}
+
+type larkUrlSecretRef struct {
+    Name string `json:"name"`
+    Key  string `json:"key"`
+}
+
+// --- Union Type ---
+
+// LarkUrl is a discriminated union type
+type LarkUrl struct {
+    variant LarkUrlVariant
+    value   any
+}
+
+// --- Variant Constructors (package-level functions) ---
+
+// LarkUrlValue creates a LarkUrl with a direct value
+func LarkUrlValue(v string) LarkUrl {
+    return LarkUrl{variant: LarkUrlVariantValue, value: larkUrlValue{Value: v}}
+}
+
+// LarkUrlSecretRef creates a LarkUrl with a secret reference
+func LarkUrlSecretRef(name, key string) LarkUrl {
+    return LarkUrl{variant: LarkUrlVariantSecretRef, value: larkUrlSecretRef{Name: name, Key: key}}
+}
+
+// --- Typed Accessors (avoid raw `any` in user code) ---
+
+// Variant returns which variant is set (typed enum, not string)
+func (u LarkUrl) Variant() LarkUrlVariant { return u.variant }
+
+// IsSet returns true if a variant has been selected
+func (u LarkUrl) IsSet() bool { return u.variant != LarkUrlVariantUnset }
+
+// IsValue returns true if this is the "value" variant
+func (u LarkUrl) IsValue() bool { return u.variant == LarkUrlVariantValue }
+
+// IsSecretRef returns true if this is the "secretRef" variant
+func (u LarkUrl) IsSecretRef() bool { return u.variant == LarkUrlVariantSecretRef }
+
+// AsValue returns the value if this is a "value" variant
+func (u LarkUrl) AsValue() (string, bool) {
+    if u.variant != LarkUrlVariantValue {
+        return "", false
+    }
+    v, ok := u.value.(larkUrlValue)
+    return v.Value, ok
+}
+
+// AsSecretRef returns the secret reference if this is a "secretRef" variant
+func (u LarkUrl) AsSecretRef() (name string, key string, ok bool) {
+    if u.variant != LarkUrlVariantSecretRef {
+        return "", "", false
+    }
+    v, ok := u.value.(larkUrlSecretRef)
+    return v.Name, v.Key, ok
+}
+
+// --- Validation ---
+
+func (u LarkUrl) Validate() error {
+    switch u.variant {
+    case LarkUrlVariantUnset:
+        return errors.New("LarkUrl: no variant selected")
+    case LarkUrlVariantValue, LarkUrlVariantSecretRef:
+        return nil
+    default:
+        return fmt.Errorf("LarkUrl: unknown variant %q", u.variant)
+    }
+}
+
+// --- JSON Marshaling (matches CUE output format) ---
+
+func (u LarkUrl) MarshalJSON() ([]byte, error) {
+    switch u.variant {
+    case LarkUrlVariantValue:
+        v, _ := u.value.(larkUrlValue)
+        return json.Marshal(map[string]any{"value": v.Value})
+    case LarkUrlVariantSecretRef:
+        s, _ := u.value.(larkUrlSecretRef)
+        return json.Marshal(map[string]any{
+            "secretRef": map[string]string{"name": s.Name, "key": s.Key},
+        })
+    default:
+        return nil, fmt.Errorf("LarkUrl: unknown variant %q", u.variant)
+    }
+}
+
+func (u *LarkUrl) UnmarshalJSON(data []byte) error {
+    var raw map[string]json.RawMessage
+    if err := json.Unmarshal(data, &raw); err != nil {
+        return err
+    }
+
+    if v, ok := raw["value"]; ok {
+        var val string
+        if err := json.Unmarshal(v, &val); err != nil {
+            return err
+        }
+        *u = LarkUrlValue(val)
+        return nil
+    }
+
+    if s, ok := raw["secretRef"]; ok {
+        var ref struct {
+            Name string `json:"name"`
+            Key  string `json:"key"`
+        }
+        if err := json.Unmarshal(s, &ref); err != nil {
+            return err
+        }
+        *u = LarkUrlSecretRef(ref.Name, ref.Key)
+        return nil
+    }
+
+    return errors.New("LarkUrl: no recognized variant in JSON")
+}
+```
+
+### Appendix C: Test Generation Template
+
+The Ginkgo/Gomega test template used for generating component tests:
+
+```go
+// pkg/definition/gen_sdk/templates/component_test.go.tmpl
+
+package {{.PackageName}}_test
+
+import (
+    "testing"
+
+    . "github.com/onsi/ginkgo/v2"
+    . "github.com/onsi/gomega"
+
+    "{{.ImportPath}}"
+)
+
+func Test{{.TypeName}}(t *testing.T) {
+    RegisterFailHandler(Fail)
+    RunSpecs(t, "{{.TypeName}} Component SDK Suite")
+}
+
+var _ = Describe("{{.TypeName}} Component", func() {
+
+    Describe("Builder", func() {
+        It("should create a valid component with required fields", func() {
+            comp := {{.PackageName}}.New("test").
+                {{range .RequiredFields}}{{.SetterName}}({{.ExampleValue}}).
+                {{end}}
+
+            Expect(comp.ComponentName()).To(Equal("test"))
+            err := comp.Validate()
+            Expect(err).NotTo(HaveOccurred())
+        })
+
+        {{range .RequiredFields}}
+        It("should fail validation when required field '{{.Name}}' is missing", func() {
+            comp := {{$.PackageName}}.New("test")
+            {{range $.RequiredFields}}{{if ne .Name $.Name}}.{{.SetterName}}({{.ExampleValue}}){{end}}{{end}}
+
+            err := comp.Validate()
+            Expect(err).To(HaveOccurred())
+            Expect(err.Error()).To(ContainSubstring("{{.Name}}"))
+        })
+        {{end}}
+    })
+
+    {{if .OptionalFields}}
+    Describe("Optional Fields", func() {
+        {{range .OptionalFields}}
+        It("should accept optional {{.Name}}", func() {
+            comp := {{$.PackageName}}.New("test").
+                {{range $.RequiredFields}}{{.SetterName}}({{.ExampleValue}}).
+                {{end}}{{.SetterName}}({{.ExampleValue}})
+
+            built := comp.Build()
+            Expect(string(built.Properties.Raw)).To(ContainSubstring(`"{{.JSONName}}"`))
+        })
+        {{end}}
+    })
+    {{end}}
+
+    {{if .ValidationConstraints}}
+    Describe("Validation Constraints", func() {
+        {{range .ValidationConstraints}}
+        It("should validate {{.FieldName}} {{.ConstraintType}}", func() {
+            comp := {{$.PackageName}}.New("test").
+                {{range $.RequiredFields}}{{.SetterName}}({{.ExampleValue}}).
+                {{end}}{{.SetterName}}({{.InvalidValue}})
+
+            err := comp.Validate()
+            Expect(err).To(HaveOccurred())
+            Expect(err.Error()).To(ContainSubstring("{{.FieldName}}"))
+        })
+        {{end}}
+    })
+    {{end}}
+})
+```
