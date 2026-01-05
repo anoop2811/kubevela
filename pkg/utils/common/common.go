@@ -62,6 +62,7 @@ import (
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 	"sigs.k8s.io/yaml"
 
+	clusteroam "github.com/oam-dev/kubevela/apis/cluster.oam.dev"
 	oamcore "github.com/oam-dev/kubevela/apis/core.oam.dev"
 	"github.com/oam-dev/kubevela/apis/types"
 	velacue "github.com/oam-dev/kubevela/pkg/cue"
@@ -94,6 +95,7 @@ func init() {
 	_ = gatewayv1beta1.AddToScheme(Scheme)
 	_ = workflowv1alpha1.AddToScheme(Scheme)
 	_ = cuexv1alpha1.AddToScheme(Scheme)
+	_ = clusteroam.AddToScheme(Scheme)
 	// +kubebuilder:scaffold:scheme
 }
 

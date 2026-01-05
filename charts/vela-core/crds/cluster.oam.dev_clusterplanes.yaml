@@ -1,0 +1,387 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: clusterplanes.cluster.oam.dev
+spec:
+  group: cluster.oam.dev
+  names:
+    categories:
+    - oam
+    - cluster
+    kind: ClusterPlane
+    listKind: ClusterPlaneList
+    plural: clusterplanes
+    shortNames:
+    - cp
+    singular: clusterplane
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: PHASE
+      type: string
+    - jsonPath: .status.currentRevision.version
+      name: REVISION
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ClusterPlane represents a composable infrastructure layer for cluster management.
+          A ClusterPlane contains components, traits, and policies that define a logical
+          unit of cluster infrastructure (e.g., networking plane, security plane).
+          ClusterPlanes can be versioned and composed into ClusterBlueprints.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ClusterPlaneSpec defines the desired state of ClusterPlane
+            properties:
+              changelog:
+                description: Changelog documents changes for this version
+                type: string
+              components:
+                description: Components define the infrastructure components in this
+                  plane
+                items:
+                  description: |-
+                    PlaneComponent defines a component within a ClusterPlane
+                    Similar to ApplicationComponent but tailored for cluster infrastructure
+                  properties:
+                    dependsOn:
+                      description: DependsOn specifies components that must be healthy
+                        before this one is deployed
+                      items:
+                        type: string
+                      type: array
+                    inputs:
+                      description: Inputs define values to be read from other components
+                        or planes
+                      items:
+                        description: InputItem defines an input variable of WorkflowStep
+                        properties:
+                          from:
+                            type: string
+                          parameterKey:
+                            type: string
+                        required:
+                        - from
+                        type: object
+                      type: array
+                    name:
+                      description: Name is the unique identifier of this component
+                        within the plane
+                      type: string
+                    outputs:
+                      description: Outputs define values to be exported for other
+                        components or planes
+                      items:
+                        description: OutputItem defines an output variable of WorkflowStep
+                        properties:
+                          name:
+                            type: string
+                          valueFrom:
+                            type: string
+                        required:
+                        - name
+                        - valueFrom
+                        type: object
+                      type: array
+                    properties:
+                      description: Properties are the configuration for this component
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    traits:
+                      description: Traits define operational behaviors attached to
+                        this component
+                      items:
+                        description: PlaneTrait defines a trait attached to a PlaneComponent
+                        properties:
+                          properties:
+                            description: Properties are the configuration for this
+                              trait
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          type:
+                            description: Type refers to a PlaneTraitDefinition
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      type: array
+                    type:
+                      description: Type refers to a PlaneComponentDefinition
+                      type: string
+                  required:
+                  - name
+                  - type
+                  type: object
+                type: array
+              crossClusterInputs:
+                description: CrossClusterInputs define dependencies on other planes
+                  in different clusters
+                items:
+                  description: CrossClusterInput defines a dependency on another plane
+                    in a different cluster
+                  properties:
+                    fallbackValue:
+                      description: FallbackValue is used if the input cannot be resolved
+                        and Required is false
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    fromCluster:
+                      description: FromCluster specifies the source cluster name
+                      type: string
+                    fromNamespace:
+                      description: FromNamespace specifies the namespace of the source
+                        ClusterPlane
+                      type: string
+                    fromPlane:
+                      description: FromPlane specifies the source ClusterPlane name
+                      type: string
+                    name:
+                      description: Name is the identifier for this input (used in
+                        templating)
+                      type: string
+                    output:
+                      description: Output specifies which output from the source plane
+                        to read
+                      type: string
+                    required:
+                      default: true
+                      description: Required indicates if this input must resolve for
+                        the plane to proceed
+                      type: boolean
+                  required:
+                  - fromCluster
+                  - fromPlane
+                  - name
+                  - output
+                  - required
+                  type: object
+                type: array
+              description:
+                description: Description provides documentation for this plane
+                type: string
+              outputs:
+                description: Outputs define values exported by this plane for cross-plane
+                  references
+                items:
+                  description: PlaneOutput defines a value exported by the plane for
+                    cross-plane references
+                  properties:
+                    name:
+                      description: Name is the identifier for this output
+                      type: string
+                    valueFrom:
+                      description: ValueFrom specifies how to derive the output value
+                      properties:
+                        component:
+                          description: Component is the name of the component to read
+                            from
+                          type: string
+                        fieldPath:
+                          description: FieldPath is the path to the field in the component's
+                            status
+                          type: string
+                      required:
+                      - component
+                      - fieldPath
+                      type: object
+                  required:
+                  - name
+                  - valueFrom
+                  type: object
+                type: array
+              owner:
+                description: Owner specifies the team that owns this plane
+                properties:
+                  contacts:
+                    description: Contacts is a list of contact emails for the team
+                    items:
+                      type: string
+                    type: array
+                  team:
+                    description: Team is the name of the owning team
+                    type: string
+                required:
+                - team
+                type: object
+              policies:
+                description: Policies define plane-level policies
+                items:
+                  description: PlanePolicy defines a policy applied to the entire
+                    plane
+                  properties:
+                    name:
+                      description: Name is the unique identifier of this policy within
+                        the plane
+                      type: string
+                    properties:
+                      description: Properties are the configuration for this policy
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    type:
+                      description: Type refers to a PlanePolicyDefinition
+                      type: string
+                  required:
+                  - type
+                  type: object
+                type: array
+              revisionHistoryLimit:
+                default: 10
+                description: RevisionHistoryLimit specifies the maximum number of
+                  revisions to retain
+                format: int32
+                type: integer
+              traits:
+                description: Traits define plane-level traits applied to all components
+                items:
+                  description: PlaneTrait defines a trait attached to a PlaneComponent
+                  properties:
+                    properties:
+                      description: Properties are the configuration for this trait
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    type:
+                      description: Type refers to a PlaneTraitDefinition
+                      type: string
+                  required:
+                  - type
+                  type: object
+                type: array
+            type: object
+          status:
+            description: ClusterPlaneStatus defines the observed state of ClusterPlane
+            properties:
+              componentHealth:
+                description: ComponentHealth summarizes the health of each component
+                items:
+                  description: ComponentHealthStatus represents the health status
+                    of a component
+                  properties:
+                    healthy:
+                      description: Healthy indicates if the component is healthy
+                      type: boolean
+                    message:
+                      description: Message provides additional health information
+                      type: string
+                    name:
+                      description: Name is the component name
+                      type: string
+                  required:
+                  - healthy
+                  - name
+                  type: object
+                type: array
+              conditions:
+                description: Conditions of the resource.
+                items:
+                  description: A Condition that may apply to a resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        LastTransitionTime is the last time this condition transitioned from one
+                        status to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        A Message containing details about this condition's last transition from
+                        one status to another, if any.
+                      type: string
+                    reason:
+                      description: A Reason for this condition's last transition from
+                        one status to another.
+                      type: string
+                    status:
+                      description: Status of this condition; is it currently True,
+                        False, or Unknown?
+                      type: string
+                    type:
+                      description: |-
+                        Type of this condition. At most one of each condition type may apply to
+                        a resource at any point in time.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              currentRevision:
+                description: CurrentRevision references the currently active revision
+                properties:
+                  name:
+                    description: Name is the full name of the revision (e.g., networking-v2.3.1)
+                    type: string
+                  version:
+                    description: Version is the semantic version (e.g., 2.3.1)
+                    type: string
+                required:
+                - name
+                - version
+                type: object
+              lastUpdated:
+                description: LastUpdated is the timestamp of the last status update
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the generation last observed by
+                  the controller
+                format: int64
+                type: integer
+              outputs:
+                additionalProperties:
+                  type: string
+                description: Outputs contains the resolved output values from this
+                  plane
+                type: object
+              phase:
+                description: Phase represents the current lifecycle phase of the plane
+                type: string
+              resourceTrackerRef:
+                description: ResourceTrackerRef references the ResourceTracker for
+                  this plane
+                properties:
+                  name:
+                    description: Name is the name of the ResourceTracker
+                    type: string
+                  uid:
+                    description: UID is the unique identifier of the ResourceTracker
+                    type: string
+                required:
+                - name
+                type: object
+              revisionCount:
+                description: RevisionCount is the total number of revisions created
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

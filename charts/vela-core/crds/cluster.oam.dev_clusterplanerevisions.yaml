@@ -1,0 +1,326 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: clusterplanerevisions.cluster.oam.dev
+spec:
+  group: cluster.oam.dev
+  names:
+    categories:
+    - oam
+    - cluster
+    kind: ClusterPlaneRevision
+    listKind: ClusterPlaneRevisionList
+    plural: clusterplanerevisions
+    shortNames:
+    - cpr
+    singular: clusterplanerevision
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.labels['cluster\.oam\.dev/plane-name']
+      name: PLANE
+      type: string
+    - jsonPath: .spec.planeSnapshot.version
+      name: VERSION
+      type: string
+    - jsonPath: .status.succeeded
+      name: SUCCEEDED
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ClusterPlaneRevision is an immutable snapshot of a ClusterPlane at a specific version.
+          Revisions are created when a ClusterPlane has the plane.oam.dev/publishVersion annotation set.
+          This follows the same pattern as ApplicationRevision for Applications.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ClusterPlaneRevisionSpec defines the desired state of ClusterPlaneRevision
+            properties:
+              compression:
+                description: Compression specifies compression settings for storage
+                properties:
+                  type:
+                    default: none
+                    description: Type is the compression algorithm (gzip, zstd, none)
+                    enum:
+                    - gzip
+                    - zstd
+                    - none
+                    type: string
+                type: object
+              planeSnapshot:
+                description: PlaneSnapshot is the immutable snapshot of the ClusterPlane
+                  spec
+                properties:
+                  components:
+                    description: Components is the snapshot of components at this
+                      version
+                    items:
+                      description: |-
+                        PlaneComponent defines a component within a ClusterPlane
+                        Similar to ApplicationComponent but tailored for cluster infrastructure
+                      properties:
+                        dependsOn:
+                          description: DependsOn specifies components that must be
+                            healthy before this one is deployed
+                          items:
+                            type: string
+                          type: array
+                        inputs:
+                          description: Inputs define values to be read from other
+                            components or planes
+                          items:
+                            description: InputItem defines an input variable of WorkflowStep
+                            properties:
+                              from:
+                                type: string
+                              parameterKey:
+                                type: string
+                            required:
+                            - from
+                            type: object
+                          type: array
+                        name:
+                          description: Name is the unique identifier of this component
+                            within the plane
+                          type: string
+                        outputs:
+                          description: Outputs define values to be exported for other
+                            components or planes
+                          items:
+                            description: OutputItem defines an output variable of
+                              WorkflowStep
+                            properties:
+                              name:
+                                type: string
+                              valueFrom:
+                                type: string
+                            required:
+                            - name
+                            - valueFrom
+                            type: object
+                          type: array
+                        properties:
+                          description: Properties are the configuration for this component
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                        traits:
+                          description: Traits define operational behaviors attached
+                            to this component
+                          items:
+                            description: PlaneTrait defines a trait attached to a
+                              PlaneComponent
+                            properties:
+                              properties:
+                                description: Properties are the configuration for
+                                  this trait
+                                type: object
+                                x-kubernetes-preserve-unknown-fields: true
+                              type:
+                                description: Type refers to a PlaneTraitDefinition
+                                type: string
+                            required:
+                            - type
+                            type: object
+                          type: array
+                        type:
+                          description: Type refers to a PlaneComponentDefinition
+                          type: string
+                      required:
+                      - name
+                      - type
+                      type: object
+                    type: array
+                  outputs:
+                    description: Outputs is the snapshot of defined outputs
+                    items:
+                      description: PlaneOutput defines a value exported by the plane
+                        for cross-plane references
+                      properties:
+                        name:
+                          description: Name is the identifier for this output
+                          type: string
+                        valueFrom:
+                          description: ValueFrom specifies how to derive the output
+                            value
+                          properties:
+                            component:
+                              description: Component is the name of the component
+                                to read from
+                              type: string
+                            fieldPath:
+                              description: FieldPath is the path to the field in the
+                                component's status
+                              type: string
+                          required:
+                          - component
+                          - fieldPath
+                          type: object
+                      required:
+                      - name
+                      - valueFrom
+                      type: object
+                    type: array
+                  owner:
+                    description: Owner contains ownership information at snapshot
+                      time
+                    properties:
+                      contacts:
+                        description: Contacts is a list of contact emails for the
+                          team
+                        items:
+                          type: string
+                        type: array
+                      team:
+                        description: Team is the name of the owning team
+                        type: string
+                    required:
+                    - team
+                    type: object
+                  policies:
+                    description: Policies is the snapshot of plane-level policies
+                    items:
+                      description: PlanePolicy defines a policy applied to the entire
+                        plane
+                      properties:
+                        name:
+                          description: Name is the unique identifier of this policy
+                            within the plane
+                          type: string
+                        properties:
+                          description: Properties are the configuration for this policy
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                        type:
+                          description: Type refers to a PlanePolicyDefinition
+                          type: string
+                      required:
+                      - type
+                      type: object
+                    type: array
+                  traits:
+                    description: Traits is the snapshot of plane-level traits
+                    items:
+                      description: PlaneTrait defines a trait attached to a PlaneComponent
+                      properties:
+                        properties:
+                          description: Properties are the configuration for this trait
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                        type:
+                          description: Type refers to a PlaneTraitDefinition
+                          type: string
+                      required:
+                      - type
+                      type: object
+                    type: array
+                  version:
+                    description: Version is the semantic version of this snapshot
+                    type: string
+                required:
+                - version
+                type: object
+              revisionMeta:
+                description: RevisionMeta contains metadata about this revision
+                properties:
+                  changelog:
+                    description: Changelog describes the changes in this revision
+                    type: string
+                  created:
+                    description: Created is when this revision was created
+                    format: date-time
+                    type: string
+                  createdBy:
+                    description: CreatedBy identifies who created this revision
+                    type: string
+                  digest:
+                    description: Digest is the SHA256 hash of the spec for integrity
+                      verification
+                    type: string
+                  parentRevision:
+                    description: ParentRevision is the name of the previous revision
+                      (for diff)
+                    type: string
+                required:
+                - created
+                - digest
+                type: object
+            required:
+            - planeSnapshot
+            - revisionMeta
+            type: object
+          status:
+            description: ClusterPlaneRevisionStatus defines the observed state of
+              ClusterPlaneRevision
+            properties:
+              activeInClusters:
+                description: ActiveInClusters lists clusters currently using this
+                  revision
+                items:
+                  description: ClusterReference contains information about a cluster
+                    using this plane/revision
+                  properties:
+                    name:
+                      description: Name is the cluster name
+                      type: string
+                    syncedAt:
+                      description: SyncedAt is when this revision was last synced
+                        to the cluster
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              outputs:
+                additionalProperties:
+                  type: string
+                description: Outputs contains the resolved output values from this
+                  revision
+                type: object
+              resourceTrackerRef:
+                description: ResourceTrackerRef references the ResourceTracker for
+                  garbage collection
+                properties:
+                  name:
+                    description: Name is the name of the ResourceTracker
+                    type: string
+                  uid:
+                    description: UID is the unique identifier of the ResourceTracker
+                    type: string
+                required:
+                - name
+                type: object
+              succeeded:
+                description: Succeeded indicates if this revision was successfully
+                  created
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
