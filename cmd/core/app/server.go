@@ -52,6 +52,7 @@ import (
 	"github.com/oam-dev/kubevela/cmd/core/app/options"
 	"github.com/oam-dev/kubevela/pkg/auth"
 	"github.com/oam-dev/kubevela/pkg/cache"
+	clusteroamv1alpha1 "github.com/oam-dev/kubevela/pkg/controller/cluster.oam.dev/v1alpha1"
 	commonconfig "github.com/oam-dev/kubevela/pkg/controller/common"
 	oamv1beta1 "github.com/oam-dev/kubevela/pkg/controller/core.oam.dev/v1beta1"
 	"github.com/oam-dev/kubevela/pkg/controller/core.oam.dev/v1beta1/application"
@@ -470,6 +471,13 @@ func prepareRun(ctx context.Context, manager manager.Manager, coreOptions *optio
 		return err
 	}
 	klog.InfoS("OAM controllers setup completed successfully")
+
+	klog.InfoS("Setting up Cluster controllers")
+	if err := clusteroamv1alpha1.Setup(manager, coreOptions.Controller.Args); err != nil {
+		klog.ErrorS(err, "Unable to setup the Cluster controller")
+		return err
+	}
+	klog.InfoS("Cluster controllers setup completed successfully")
 
 	klog.V(2).InfoS("Initializing control plane cluster info")
 	if err := multicluster.InitClusterInfo(manager.GetConfig()); err != nil {
