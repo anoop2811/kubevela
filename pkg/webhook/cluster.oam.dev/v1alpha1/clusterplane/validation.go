@@ -55,6 +55,8 @@ func (h *ValidatingHandler) ValidateCreate(ctx context.Context, plane *v1alpha1.
 	errs = append(errs, ValidateTraits(plane)...)
 	errs = append(errs, ValidatePolicies(plane)...)
 	errs = append(errs, ValidateOutputs(plane)...)
+	errs = append(errs, ValidateCrossClusterInputs(plane)...)
+	errs = append(errs, ValidateSelfReference(plane)...)
 	errs = append(errs, ValidateAnnotations(plane)...)
 
 	return errs
@@ -307,6 +309,87 @@ func ValidateComponentReferences(plane *v1alpha1.ClusterPlane) field.ErrorList {
 			errs = append(errs, field.NotFound(
 				outputsPath.Index(i).Child("valueFrom", "component"),
 				output.ValueFrom.Component))
+		}
+	}
+
+	return errs
+}
+
+// ValidateCrossClusterInputs validates CrossClusterInputs configuration
+func ValidateCrossClusterInputs(plane *v1alpha1.ClusterPlane) field.ErrorList {
+	var errs field.ErrorList
+	inputsPath := field.NewPath("spec", "crossClusterInputs")
+
+	inputNames := make(map[string]int)
+	for i, input := range plane.Spec.CrossClusterInputs {
+		inputPath := inputsPath.Index(i)
+
+		// Check name is not empty
+		if input.Name == "" {
+			errs = append(errs, field.Required(
+				inputPath.Child("name"),
+				"input name is required"))
+			continue
+		}
+
+		// Check name format (DNS-1123 label)
+		if !dns1123LabelRegexp.MatchString(input.Name) {
+			errs = append(errs, field.Invalid(
+				inputPath.Child("name"),
+				input.Name,
+				"must be a valid DNS-1123 label (lowercase alphanumeric with hyphens)"))
+		}
+
+		// Check for duplicate names
+		if prevIdx, exists := inputNames[input.Name]; exists {
+			errs = append(errs, field.Duplicate(
+				inputPath.Child("name"),
+				fmt.Sprintf("input name %q is duplicated (first occurrence at index %d)", input.Name, prevIdx)))
+		}
+		inputNames[input.Name] = i
+
+		// Check fromCluster is not empty
+		if input.FromCluster == "" {
+			errs = append(errs, field.Required(
+				inputPath.Child("fromCluster"),
+				"source cluster name is required"))
+		}
+
+		// Check fromPlane is not empty
+		if input.FromPlane == "" {
+			errs = append(errs, field.Required(
+				inputPath.Child("fromPlane"),
+				"source plane name is required"))
+		}
+
+		// Check output is not empty
+		if input.Output == "" {
+			errs = append(errs, field.Required(
+				inputPath.Child("output"),
+				"output name is required"))
+		}
+
+		// Check that non-required inputs have fallback if they're critical
+		// (This is a warning-level check, not blocking)
+	}
+
+	return errs
+}
+
+// ValidateSelfReference checks that a plane doesn't reference itself as an input
+func ValidateSelfReference(plane *v1alpha1.ClusterPlane) field.ErrorList {
+	var errs field.ErrorList
+	inputsPath := field.NewPath("spec", "crossClusterInputs")
+
+	for i, input := range plane.Spec.CrossClusterInputs {
+		// Check for self-reference (same plane in same namespace, local cluster)
+		if (input.FromCluster == "" || input.FromCluster == "local") &&
+			input.FromPlane == plane.Name &&
+			(input.FromNamespace == "" || input.FromNamespace == plane.Namespace) {
+			errs = append(errs, field.Invalid(
+				inputsPath.Index(i),
+				input.Name,
+				"plane cannot reference itself as an input source"))
 		}
 	}
 

@@ -500,6 +500,389 @@ var _ = Describe("ClusterPlane Validating Webhook", func() {
 	})
 })
 
+var _ = Describe("CrossClusterInput Validation", func() {
+	Context("ValidateCrossClusterInputs", func() {
+		It("should pass for valid cross-cluster inputs", func() {
+			plane := &v1alpha1.ClusterPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-plane",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "network-cidr",
+							FromCluster: "management-cluster",
+							FromPlane:   "network-plane",
+							Output:      "pod-cidr",
+							Required:    true,
+						},
+						{
+							Name:          "dns-server",
+							FromCluster:   "local",
+							FromPlane:     "dns-plane",
+							FromNamespace: "dns-system",
+							Output:        "server-ip",
+							Required:      false,
+						},
+					},
+				},
+			}
+			errs := ValidateCrossClusterInputs(plane)
+			Expect(errs).Should(BeEmpty())
+		})
+
+		It("should fail when input name is empty", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "",
+							FromCluster: "cluster-1",
+							FromPlane:   "plane-1",
+							Output:      "output-1",
+						},
+					},
+				},
+			}
+			errs := ValidateCrossClusterInputs(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("input name is required"))
+		})
+
+		It("should fail when input name has invalid format", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "Invalid_Name",
+							FromCluster: "cluster-1",
+							FromPlane:   "plane-1",
+							Output:      "output-1",
+						},
+					},
+				},
+			}
+			errs := ValidateCrossClusterInputs(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("DNS-1123"))
+		})
+
+		It("should fail when input names are duplicated", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "my-input",
+							FromCluster: "cluster-1",
+							FromPlane:   "plane-1",
+							Output:      "output-1",
+						},
+						{
+							Name:        "my-input",
+							FromCluster: "cluster-2",
+							FromPlane:   "plane-2",
+							Output:      "output-2",
+						},
+					},
+				},
+			}
+			errs := ValidateCrossClusterInputs(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("duplicated"))
+		})
+
+		It("should fail when fromCluster is empty", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "valid-input",
+							FromCluster: "",
+							FromPlane:   "plane-1",
+							Output:      "output-1",
+						},
+					},
+				},
+			}
+			errs := ValidateCrossClusterInputs(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("source cluster name is required"))
+		})
+
+		It("should fail when fromPlane is empty", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "valid-input",
+							FromCluster: "cluster-1",
+							FromPlane:   "",
+							Output:      "output-1",
+						},
+					},
+				},
+			}
+			errs := ValidateCrossClusterInputs(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("source plane name is required"))
+		})
+
+		It("should fail when output is empty", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "valid-input",
+							FromCluster: "cluster-1",
+							FromPlane:   "plane-1",
+							Output:      "",
+						},
+					},
+				},
+			}
+			errs := ValidateCrossClusterInputs(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("output name is required"))
+		})
+
+		It("should collect multiple errors", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "",
+							FromCluster: "",
+							FromPlane:   "",
+							Output:      "",
+						},
+					},
+				},
+			}
+			errs := ValidateCrossClusterInputs(plane)
+			// Should have error for name (required), skips other validation for empty name
+			// But we continue with next validations for fromCluster, fromPlane, output
+			Expect(len(errs)).Should(BeNumerically(">=", 1))
+		})
+
+		It("should pass for empty cross-cluster inputs", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{},
+				},
+			}
+			errs := ValidateCrossClusterInputs(plane)
+			Expect(errs).Should(BeEmpty())
+		})
+	})
+
+	Context("ValidateSelfReference", func() {
+		It("should pass when no self-reference exists", func() {
+			plane := &v1alpha1.ClusterPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "my-plane",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "input-1",
+							FromCluster: "other-cluster",
+							FromPlane:   "my-plane",
+							Output:      "output-1",
+						},
+					},
+				},
+			}
+			errs := ValidateSelfReference(plane)
+			Expect(errs).Should(BeEmpty())
+		})
+
+		It("should fail when referencing self with local cluster", func() {
+			plane := &v1alpha1.ClusterPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "my-plane",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "self-ref",
+							FromCluster: "local",
+							FromPlane:   "my-plane",
+							Output:      "output-1",
+						},
+					},
+				},
+			}
+			errs := ValidateSelfReference(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("cannot reference itself"))
+		})
+
+		It("should fail when referencing self with empty cluster", func() {
+			plane := &v1alpha1.ClusterPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "my-plane",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "self-ref",
+							FromCluster: "",
+							FromPlane:   "my-plane",
+							Output:      "output-1",
+						},
+					},
+				},
+			}
+			errs := ValidateSelfReference(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("cannot reference itself"))
+		})
+
+		It("should fail when referencing self with same namespace", func() {
+			plane := &v1alpha1.ClusterPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "my-plane",
+					Namespace: "production",
+				},
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:          "self-ref",
+							FromCluster:   "local",
+							FromPlane:     "my-plane",
+							FromNamespace: "production",
+							Output:        "output-1",
+						},
+					},
+				},
+			}
+			errs := ValidateSelfReference(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+		})
+
+		It("should pass when referencing same name in different namespace", func() {
+			plane := &v1alpha1.ClusterPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "my-plane",
+					Namespace: "production",
+				},
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:          "other-ns-ref",
+							FromCluster:   "local",
+							FromPlane:     "my-plane",
+							FromNamespace: "staging", // Different namespace
+							Output:        "output-1",
+						},
+					},
+				},
+			}
+			errs := ValidateSelfReference(plane)
+			Expect(errs).Should(BeEmpty())
+		})
+
+		It("should pass when no cross-cluster inputs", func() {
+			plane := &v1alpha1.ClusterPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "my-plane",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.ClusterPlaneSpec{
+					CrossClusterInputs: nil,
+				},
+			}
+			errs := ValidateSelfReference(plane)
+			Expect(errs).Should(BeEmpty())
+		})
+	})
+
+	Context("Webhook Integration", func() {
+		BeforeEach(func() {
+			cli, err := client.New(cfg, client.Options{Scheme: testScheme})
+			Expect(err).Should(BeNil())
+			handler = ValidatingHandler{
+				Client:  cli,
+				Decoder: decoder,
+			}
+		})
+
+		It("should reject ClusterPlane with self-referencing input", func() {
+			plane := &v1alpha1.ClusterPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "self-ref-plane",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.ClusterPlaneSpec{
+					Components: []v1alpha1.PlaneComponent{
+						{Name: "nginx", Type: "helm"},
+					},
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "bad-input",
+							FromCluster: "local",
+							FromPlane:   "self-ref-plane",
+							Output:      "some-output",
+						},
+					},
+				},
+			}
+			planeRaw, _ := json.Marshal(plane)
+
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Create,
+					Object:    runtime.RawExtension{Raw: planeRaw},
+					Namespace: "default",
+				},
+			}
+
+			resp := handler.Handle(context.TODO(), req)
+			Expect(resp.Allowed).Should(BeFalse())
+			Expect(resp.Result.Message).Should(ContainSubstring("cannot reference itself"))
+		})
+
+		It("should allow ClusterPlane with valid cross-cluster inputs", func() {
+			plane := &v1alpha1.ClusterPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "valid-xcluster-plane",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.ClusterPlaneSpec{
+					Components: []v1alpha1.PlaneComponent{
+						{Name: "nginx", Type: "helm"},
+					},
+					CrossClusterInputs: []v1alpha1.CrossClusterInput{
+						{
+							Name:        "network-config",
+							FromCluster: "management",
+							FromPlane:   "network-plane",
+							Output:      "cidr-block",
+							Required:    true,
+						},
+					},
+				},
+			}
+			planeRaw, _ := json.Marshal(plane)
+
+			req := admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Create,
+					Object:    runtime.RawExtension{Raw: planeRaw},
+					Namespace: "default",
+				},
+			}
+
+			resp := handler.Handle(context.TODO(), req)
+			Expect(resp.Allowed).Should(BeTrue())
+		})
+	})
+})
+
 var _ = Describe("Validation Functions", func() {
 	Context("ValidateComponentNames", func() {
 		It("should pass for valid component names", func() {

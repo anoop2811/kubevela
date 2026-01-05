@@ -118,6 +118,37 @@ var (
 		Name: "kubevela_clusterplane_overall_healthy",
 		Help: "Whether the ClusterPlane is overall healthy (1) or not (0).",
 	}, []string{"namespace", "name"})
+
+	// ClusterPlaneInputResolutionDuration reports the duration of input resolution
+	ClusterPlaneInputResolutionDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kubevela_clusterplane_input_resolution_duration_seconds",
+		Help:    "ClusterPlane cross-cluster input resolution duration in seconds.",
+		Buckets: velametrics.FineGrainedBuckets,
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneInputsTotal reports the total number of cross-cluster inputs
+	ClusterPlaneInputsTotal = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_inputs_total",
+		Help: "Total number of cross-cluster inputs for a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneInputsResolved reports the number of resolved inputs
+	ClusterPlaneInputsResolved = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_inputs_resolved",
+		Help: "Number of resolved cross-cluster inputs for a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneInputsFailed reports the number of failed input resolutions
+	ClusterPlaneInputsFailed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_inputs_failed",
+		Help: "Number of failed cross-cluster input resolutions for a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneInputResolutionErrors reports errors during input resolution
+	ClusterPlaneInputResolutionErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubevela_clusterplane_input_resolution_errors_total",
+		Help: "Total number of cross-cluster input resolution errors.",
+	}, []string{"namespace", "name", "input_name", "source_cluster"})
 )
 
 var registerClusterPlaneMetricsOnce sync.Once
@@ -141,6 +172,11 @@ func RegisterClusterPlaneMetrics() {
 			ClusterPlaneFailedComponents,
 			ClusterPlanePendingComponents,
 			ClusterPlaneOverallHealthy,
+			ClusterPlaneInputResolutionDuration,
+			ClusterPlaneInputsTotal,
+			ClusterPlaneInputsResolved,
+			ClusterPlaneInputsFailed,
+			ClusterPlaneInputResolutionErrors,
 		)
 	})
 }

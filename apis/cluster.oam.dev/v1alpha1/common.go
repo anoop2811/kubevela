@@ -184,6 +184,62 @@ type ClusterReference struct {
 	SyncedAt string `json:"syncedAt,omitempty"`
 }
 
+// ResolvedInputStatus tracks the resolution status of a CrossClusterInput
+type ResolvedInputStatus struct {
+	// Name is the input name (matches CrossClusterInput.Name)
+	Name string `json:"name"`
+
+	// FromCluster is the source cluster
+	FromCluster string `json:"fromCluster"`
+
+	// FromPlane is the source plane name
+	FromPlane string `json:"fromPlane"`
+
+	// FromNamespace is the source plane namespace
+	// +optional
+	FromNamespace string `json:"fromNamespace,omitempty"`
+
+	// Output is the output name being read
+	Output string `json:"output"`
+
+	// Resolved indicates if the input was successfully resolved
+	Resolved bool `json:"resolved"`
+
+	// Value is the resolved value (empty if not resolved)
+	// +optional
+	Value string `json:"value,omitempty"`
+
+	// UsedFallback indicates if the fallback value was used
+	// +optional
+	UsedFallback bool `json:"usedFallback,omitempty"`
+
+	// Error contains the resolution error message if any
+	// +optional
+	Error string `json:"error,omitempty"`
+
+	// LastResolvedTime is when this input was last resolved
+	// +optional
+	LastResolvedTime string `json:"lastResolvedTime,omitempty"`
+}
+
+// InputResolutionSummary provides an aggregate view of input resolution status
+type InputResolutionSummary struct {
+	// TotalInputs is the total number of cross-cluster inputs
+	TotalInputs int `json:"totalInputs"`
+
+	// ResolvedInputs is the number of successfully resolved inputs
+	ResolvedInputs int `json:"resolvedInputs"`
+
+	// FailedInputs is the number of failed input resolutions
+	FailedInputs int `json:"failedInputs"`
+
+	// PendingInputs is the number of inputs not yet resolved
+	PendingInputs int `json:"pendingInputs"`
+
+	// AllResolved indicates if all required inputs are resolved
+	AllResolved bool `json:"allResolved"`
+}
+
 // PlaneComponentPhase represents the phase of a component within a ClusterPlane
 type PlaneComponentPhase string
 
