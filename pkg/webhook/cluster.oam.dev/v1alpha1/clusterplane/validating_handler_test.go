@@ -29,6 +29,7 @@ import (
 	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1041,6 +1042,161 @@ var _ = Describe("Validation Functions", func() {
 			}
 			errs := ValidateOutputs(plane)
 			Expect(errs).ShouldNot(BeEmpty())
+		})
+
+		It("should fail for invalid output name format", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					Outputs: []v1alpha1.PlaneOutput{
+						{
+							Name: "Invalid_Output_Name",
+							ValueFrom: v1alpha1.PlaneOutputValueFrom{
+								Component: "nginx",
+								FieldPath: "status.endpoint",
+							},
+						},
+					},
+				},
+			}
+			errs := ValidateOutputs(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("DNS-1123"))
+		})
+
+		It("should fail for field path starting with dot", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					Outputs: []v1alpha1.PlaneOutput{
+						{
+							Name: "endpoint",
+							ValueFrom: v1alpha1.PlaneOutputValueFrom{
+								Component: "nginx",
+								FieldPath: ".status.endpoint",
+							},
+						},
+					},
+				},
+			}
+			errs := ValidateOutputs(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("cannot start with '.'"))
+		})
+
+		It("should fail for field path ending with dot", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					Outputs: []v1alpha1.PlaneOutput{
+						{
+							Name: "endpoint",
+							ValueFrom: v1alpha1.PlaneOutputValueFrom{
+								Component: "nginx",
+								FieldPath: "status.endpoint.",
+							},
+						},
+					},
+				},
+			}
+			errs := ValidateOutputs(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("cannot end with '.'"))
+		})
+
+		It("should fail for field path with consecutive dots", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					Outputs: []v1alpha1.PlaneOutput{
+						{
+							Name: "endpoint",
+							ValueFrom: v1alpha1.PlaneOutputValueFrom{
+								Component: "nginx",
+								FieldPath: "status..endpoint",
+							},
+						},
+					},
+				},
+			}
+			errs := ValidateOutputs(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Error()).Should(ContainSubstring("consecutive dots"))
+		})
+	})
+
+	Context("ValidateFieldPath", func() {
+		It("should pass for valid field paths", func() {
+			validPaths := []string{
+				"status.phase",
+				"spec.replicas",
+				"metadata.name",
+				"status.loadBalancer.ingress[0].ip",
+				"spec.template.spec.containers[0].image",
+			}
+			for _, path := range validPaths {
+				errs := ValidateFieldPath(nil, path)
+				Expect(errs).Should(BeEmpty(), "Path %s should be valid", path)
+			}
+		})
+
+		It("should return empty for empty path", func() {
+			errs := ValidateFieldPath(nil, "")
+			Expect(errs).Should(BeEmpty())
+		})
+	})
+
+	Context("ValidateComponentReferences", func() {
+		It("should pass when output references existing component", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					Components: []v1alpha1.PlaneComponent{
+						{Name: "nginx", Type: "helm"},
+					},
+					Outputs: []v1alpha1.PlaneOutput{
+						{
+							Name: "endpoint",
+							ValueFrom: v1alpha1.PlaneOutputValueFrom{
+								Component: "nginx",
+								FieldPath: "status.endpoint",
+							},
+						},
+					},
+				},
+			}
+			errs := ValidateComponentReferences(plane)
+			Expect(errs).Should(BeEmpty())
+		})
+
+		It("should fail when output references non-existent component", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					Components: []v1alpha1.PlaneComponent{
+						{Name: "nginx", Type: "helm"},
+					},
+					Outputs: []v1alpha1.PlaneOutput{
+						{
+							Name: "endpoint",
+							ValueFrom: v1alpha1.PlaneOutputValueFrom{
+								Component: "non-existent",
+								FieldPath: "status.endpoint",
+							},
+						},
+					},
+				},
+			}
+			errs := ValidateComponentReferences(plane)
+			Expect(errs).ShouldNot(BeEmpty())
+			Expect(errs[0].Type).Should(Equal(field.ErrorTypeNotFound))
+		})
+
+		It("should pass when no outputs defined", func() {
+			plane := &v1alpha1.ClusterPlane{
+				Spec: v1alpha1.ClusterPlaneSpec{
+					Components: []v1alpha1.PlaneComponent{
+						{Name: "nginx", Type: "helm"},
+					},
+					Outputs: nil,
+				},
+			}
+			errs := ValidateComponentReferences(plane)
+			Expect(errs).Should(BeEmpty())
 		})
 	})
 })

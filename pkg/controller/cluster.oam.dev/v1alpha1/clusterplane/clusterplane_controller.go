@@ -50,12 +50,16 @@ const (
 	ConditionTypeInputsResolved condition.ConditionType = "InputsResolved"
 )
 
+// ConditionTypeOutputsResolved indicates whether all outputs are resolved
+const ConditionTypeOutputsResolved condition.ConditionType = "OutputsResolved"
+
 // Reconciler reconciles a ClusterPlane object
 type Reconciler struct {
 	client.Client
-	Scheme        *runtime.Scheme
-	Recorder      event.Recorder
-	InputResolver *InputResolver
+	Scheme         *runtime.Scheme
+	Recorder       event.Recorder
+	InputResolver  *InputResolver
+	OutputResolver *OutputResolver
 	options
 }
 
@@ -152,6 +156,62 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				LastTransitionTime: now,
 				Reason:             "AllInputsResolved",
 				Message:            "All cross-cluster inputs resolved successfully",
+			})
+		}
+	}
+
+	// Resolve outputs from component resources
+	if len(plane.Spec.Outputs) > 0 {
+		outputStartTime := time.Now()
+		allOutputsResolved, resolveErr := r.OutputResolver.ResolveOutputs(ctx, &plane)
+		metrics.ClusterPlaneOutputResolutionDuration.WithLabelValues(req.Namespace, req.Name).
+			Observe(time.Since(outputStartTime).Seconds())
+
+		// Update output metrics
+		if plane.Status.OutputResolutionSummary != nil {
+			summary := plane.Status.OutputResolutionSummary
+			metrics.ClusterPlaneOutputsTotal.WithLabelValues(req.Namespace, req.Name).
+				Set(float64(summary.TotalOutputs))
+			metrics.ClusterPlaneOutputsResolved.WithLabelValues(req.Namespace, req.Name).
+				Set(float64(summary.ResolvedOutputs))
+			metrics.ClusterPlaneOutputsFailed.WithLabelValues(req.Namespace, req.Name).
+				Set(float64(summary.FailedOutputs))
+		}
+
+		// Track individual resolution errors for metrics
+		for _, resolved := range plane.Status.ResolvedOutputs {
+			if !resolved.Resolved && resolved.Error != "" {
+				metrics.ClusterPlaneOutputResolutionErrors.WithLabelValues(
+					req.Namespace, req.Name, resolved.Name, resolved.Component).Inc()
+			}
+		}
+
+		if resolveErr != nil {
+			klog.ErrorS(resolveErr, "Failed to resolve outputs",
+				"clusterPlane", klog.KRef(req.Namespace, req.Name))
+			metrics.ClusterPlaneReconcileErrors.WithLabelValues(req.Namespace, req.Name, "output_resolution").Inc()
+		}
+
+		// Update output resolution condition
+		if !allOutputsResolved {
+			plane.SetConditions(condition.Condition{
+				Type:               ConditionTypeOutputsResolved,
+				Status:             "False",
+				LastTransitionTime: now,
+				Reason:             "UnresolvedOutputs",
+				Message:            "Some outputs could not be resolved from component resources",
+			})
+			klog.InfoS("ClusterPlane has unresolved outputs",
+				"clusterPlane", klog.KRef(req.Namespace, req.Name),
+				"resolved", plane.Status.OutputResolutionSummary.ResolvedOutputs,
+				"failed", plane.Status.OutputResolutionSummary.FailedOutputs)
+		} else {
+			plane.SetConditions(condition.Condition{
+				Type:               ConditionTypeOutputsResolved,
+				Status:             "True",
+				LastTransitionTime: now,
+				Reason:             "AllOutputsResolved",
+				Message:            "All outputs resolved successfully",
 			})
 		}
 	}
@@ -360,10 +420,11 @@ func Setup(mgr ctrl.Manager, args oamctrl.Args) error {
 	metrics.RegisterClusterPlaneMetrics()
 
 	r := Reconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		InputResolver: NewInputResolver(mgr.GetClient()),
-		options:       parseOptions(args),
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		InputResolver:  NewInputResolver(mgr.GetClient()),
+		OutputResolver: NewOutputResolver(mgr.GetClient()),
+		options:        parseOptions(args),
 	}
 	return r.SetupWithManager(mgr)
 }

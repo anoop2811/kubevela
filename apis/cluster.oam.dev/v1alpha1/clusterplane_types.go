@@ -95,6 +95,14 @@ type ClusterPlaneStatus struct {
 	// +optional
 	Outputs map[string]string `json:"outputs,omitempty"`
 
+	// ResolvedOutputs tracks the status of output resolution
+	// +optional
+	ResolvedOutputs []ResolvedOutputStatus `json:"resolvedOutputs,omitempty"`
+
+	// OutputResolutionSummary provides an aggregate view of output resolution
+	// +optional
+	OutputResolutionSummary *OutputResolutionSummary `json:"outputResolutionSummary,omitempty"`
+
 	// ResolvedInputs tracks the status of cross-cluster input resolution
 	// +optional
 	ResolvedInputs []ResolvedInputStatus `json:"resolvedInputs,omitempty"`

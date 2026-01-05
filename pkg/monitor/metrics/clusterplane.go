@@ -149,6 +149,37 @@ var (
 		Name: "kubevela_clusterplane_input_resolution_errors_total",
 		Help: "Total number of cross-cluster input resolution errors.",
 	}, []string{"namespace", "name", "input_name", "source_cluster"})
+
+	// ClusterPlaneOutputResolutionDuration reports the duration of output resolution
+	ClusterPlaneOutputResolutionDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kubevela_clusterplane_output_resolution_duration_seconds",
+		Help:    "ClusterPlane output resolution duration in seconds.",
+		Buckets: velametrics.FineGrainedBuckets,
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneOutputsTotal reports the total number of outputs
+	ClusterPlaneOutputsTotal = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_outputs_total",
+		Help: "Total number of outputs for a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneOutputsResolved reports the number of resolved outputs
+	ClusterPlaneOutputsResolved = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_outputs_resolved",
+		Help: "Number of resolved outputs for a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneOutputsFailed reports the number of failed output resolutions
+	ClusterPlaneOutputsFailed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_outputs_failed",
+		Help: "Number of failed output resolutions for a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneOutputResolutionErrors reports errors during output resolution
+	ClusterPlaneOutputResolutionErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubevela_clusterplane_output_resolution_errors_total",
+		Help: "Total number of output resolution errors.",
+	}, []string{"namespace", "name", "output_name", "component"})
 )
 
 var registerClusterPlaneMetricsOnce sync.Once
@@ -177,6 +208,11 @@ func RegisterClusterPlaneMetrics() {
 			ClusterPlaneInputsResolved,
 			ClusterPlaneInputsFailed,
 			ClusterPlaneInputResolutionErrors,
+			ClusterPlaneOutputResolutionDuration,
+			ClusterPlaneOutputsTotal,
+			ClusterPlaneOutputsResolved,
+			ClusterPlaneOutputsFailed,
+			ClusterPlaneOutputResolutionErrors,
 		)
 	})
 }

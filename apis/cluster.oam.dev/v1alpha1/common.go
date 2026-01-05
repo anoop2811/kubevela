@@ -333,3 +333,48 @@ type PlaneHealthSummary struct {
 	// OverallHealthy indicates if the plane is considered healthy overall
 	OverallHealthy bool `json:"overallHealthy"`
 }
+
+// ResolvedOutputStatus tracks the resolution status of a PlaneOutput
+type ResolvedOutputStatus struct {
+	// Name is the output name (matches PlaneOutput.Name)
+	Name string `json:"name"`
+
+	// Component is the source component name
+	Component string `json:"component"`
+
+	// FieldPath is the path used to extract the value
+	FieldPath string `json:"fieldPath"`
+
+	// Resolved indicates if the output was successfully resolved
+	Resolved bool `json:"resolved"`
+
+	// Value is the resolved value (empty if not resolved)
+	// +optional
+	Value string `json:"value,omitempty"`
+
+	// Error contains the resolution error message if any
+	// +optional
+	Error string `json:"error,omitempty"`
+
+	// LastResolvedTime is when this output was last resolved
+	// +optional
+	LastResolvedTime string `json:"lastResolvedTime,omitempty"`
+}
+
+// OutputResolutionSummary provides an aggregate view of output resolution status
+type OutputResolutionSummary struct {
+	// TotalOutputs is the total number of outputs
+	TotalOutputs int `json:"totalOutputs"`
+
+	// ResolvedOutputs is the number of successfully resolved outputs
+	ResolvedOutputs int `json:"resolvedOutputs"`
+
+	// FailedOutputs is the number of failed output resolutions
+	FailedOutputs int `json:"failedOutputs"`
+
+	// PendingOutputs is the number of outputs not yet resolved
+	PendingOutputs int `json:"pendingOutputs"`
+
+	// AllResolved indicates if all outputs are resolved
+	AllResolved bool `json:"allResolved"`
+}

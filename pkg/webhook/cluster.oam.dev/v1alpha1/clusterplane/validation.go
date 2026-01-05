@@ -55,6 +55,7 @@ func (h *ValidatingHandler) ValidateCreate(ctx context.Context, plane *v1alpha1.
 	errs = append(errs, ValidateTraits(plane)...)
 	errs = append(errs, ValidatePolicies(plane)...)
 	errs = append(errs, ValidateOutputs(plane)...)
+	errs = append(errs, ValidateComponentReferences(plane)...) // Validates output component references exist
 	errs = append(errs, ValidateCrossClusterInputs(plane)...)
 	errs = append(errs, ValidateSelfReference(plane)...)
 	errs = append(errs, ValidateAnnotations(plane)...)
@@ -224,6 +225,14 @@ func ValidateOutputs(plane *v1alpha1.ClusterPlane) field.ErrorList {
 			continue
 		}
 
+		// Check name format (DNS-1123 label for consistency)
+		if !dns1123LabelRegexp.MatchString(output.Name) {
+			errs = append(errs, field.Invalid(
+				outputPath.Child("name"),
+				output.Name,
+				"must be a valid DNS-1123 label (lowercase alphanumeric with hyphens)"))
+		}
+
 		// Check for duplicate names
 		if prevIdx, exists := outputNames[output.Name]; exists {
 			errs = append(errs, field.Duplicate(
@@ -243,6 +252,52 @@ func ValidateOutputs(plane *v1alpha1.ClusterPlane) field.ErrorList {
 			errs = append(errs, field.Required(
 				outputPath.Child("valueFrom", "fieldPath"),
 				"output valueFrom.fieldPath is required"))
+		} else {
+			// Validate field path format
+			errs = append(errs, ValidateFieldPath(outputPath.Child("valueFrom", "fieldPath"), output.ValueFrom.FieldPath)...)
+		}
+	}
+
+	return errs
+}
+
+// ValidateFieldPath validates a field path expression format
+func ValidateFieldPath(fldPath *field.Path, path string) field.ErrorList {
+	var errs field.ErrorList
+
+	// Field path should not be empty (already checked above, but defensive)
+	if path == "" {
+		return errs
+	}
+
+	// Field path must start with a valid segment
+	// Valid formats: "status.foo", "spec.bar[0]", "metadata.name", etc.
+	// Using crossplane-runtime/pkg/fieldpath format
+
+	// Basic validation - must start with a letter or valid segment
+	if len(path) > 0 && path[0] == '.' {
+		errs = append(errs, field.Invalid(
+			fldPath,
+			path,
+			"field path cannot start with '.'"))
+	}
+
+	// Check for invalid patterns
+	if len(path) > 0 && path[len(path)-1] == '.' {
+		errs = append(errs, field.Invalid(
+			fldPath,
+			path,
+			"field path cannot end with '.'"))
+	}
+
+	// Check for empty segments (consecutive dots)
+	for i := 0; i < len(path)-1; i++ {
+		if path[i] == '.' && path[i+1] == '.' {
+			errs = append(errs, field.Invalid(
+				fldPath,
+				path,
+				"field path cannot contain empty segments (consecutive dots)"))
+			break
 		}
 	}
 
