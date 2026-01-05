@@ -69,6 +69,25 @@ var (
 		Name: "kubevela_clusterplane_info",
 		Help: "Information about ClusterPlane resources. Always 1, labels provide metadata.",
 	}, []string{"namespace", "name", "current_revision"})
+
+	// ClusterPlaneWebhookDuration reports the duration of webhook validation
+	ClusterPlaneWebhookDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kubevela_clusterplane_webhook_duration_seconds",
+		Help:    "ClusterPlane webhook validation duration in seconds.",
+		Buckets: velametrics.FineGrainedBuckets,
+	}, []string{"operation"})
+
+	// ClusterPlaneWebhookTotal reports the total number of webhook validations
+	ClusterPlaneWebhookTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubevela_clusterplane_webhook_total",
+		Help: "Total number of ClusterPlane webhook validations.",
+	}, []string{"operation"})
+
+	// ClusterPlaneWebhookErrors reports the number of webhook validation errors
+	ClusterPlaneWebhookErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubevela_clusterplane_webhook_errors_total",
+		Help: "Total number of ClusterPlane webhook validation errors.",
+	}, []string{"operation", "error_type"})
 )
 
 var registerClusterPlaneMetricsOnce sync.Once
@@ -84,6 +103,9 @@ func RegisterClusterPlaneMetrics() {
 			ClusterPlaneComponentCount,
 			ClusterPlaneRevisionCount,
 			ClusterPlaneInfo,
+			ClusterPlaneWebhookDuration,
+			ClusterPlaneWebhookTotal,
+			ClusterPlaneWebhookErrors,
 		)
 	})
 }
