@@ -46,10 +46,10 @@ var (
 	}, []string{"namespace", "name", "error_type"})
 
 	// ClusterPlanePhase reports the current phase of each ClusterPlane
-	// Values: 0=Draft, 1=Publishing, 2=Running, 3=Suspended, 4=Failed, -1=Unknown
+	// Values: 0=Draft, 1=Publishing, 2=Running, 3=Degraded, 4=Suspended, 5=Failed, -1=Unknown
 	ClusterPlanePhase = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "kubevela_clusterplane_phase",
-		Help: "ClusterPlane phase as numeric value (0=Draft, 1=Publishing, 2=Running, 3=Suspended, 4=Failed, -1=Unknown).",
+		Help: "ClusterPlane phase as numeric value (0=Draft, 1=Publishing, 2=Running, 3=Degraded, 4=Suspended, 5=Failed, -1=Unknown).",
 	}, []string{"namespace", "name"})
 
 	// ClusterPlaneComponentCount reports the number of components in each ClusterPlane
@@ -88,6 +88,36 @@ var (
 		Name: "kubevela_clusterplane_webhook_errors_total",
 		Help: "Total number of ClusterPlane webhook validation errors.",
 	}, []string{"operation", "error_type"})
+
+	// ClusterPlaneHealthyComponents reports the number of healthy components
+	ClusterPlaneHealthyComponents = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_healthy_components",
+		Help: "Number of healthy components in a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneDegradedComponents reports the number of degraded components
+	ClusterPlaneDegradedComponents = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_degraded_components",
+		Help: "Number of degraded components in a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneFailedComponents reports the number of failed components
+	ClusterPlaneFailedComponents = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_failed_components",
+		Help: "Number of failed components in a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlanePendingComponents reports the number of pending components
+	ClusterPlanePendingComponents = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_pending_components",
+		Help: "Number of pending components in a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneOverallHealthy reports whether the plane is overall healthy (1) or not (0)
+	ClusterPlaneOverallHealthy = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_overall_healthy",
+		Help: "Whether the ClusterPlane is overall healthy (1) or not (0).",
+	}, []string{"namespace", "name"})
 )
 
 var registerClusterPlaneMetricsOnce sync.Once
@@ -106,6 +136,11 @@ func RegisterClusterPlaneMetrics() {
 			ClusterPlaneWebhookDuration,
 			ClusterPlaneWebhookTotal,
 			ClusterPlaneWebhookErrors,
+			ClusterPlaneHealthyComponents,
+			ClusterPlaneDegradedComponents,
+			ClusterPlaneFailedComponents,
+			ClusterPlanePendingComponents,
+			ClusterPlaneOverallHealthy,
 		)
 	})
 }

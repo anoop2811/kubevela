@@ -87,6 +87,10 @@ type ClusterPlaneStatus struct {
 	// +optional
 	ComponentHealth []ComponentHealthStatus `json:"componentHealth,omitempty"`
 
+	// HealthSummary provides an aggregate view of plane health
+	// +optional
+	HealthSummary *PlaneHealthSummary `json:"healthSummary,omitempty"`
+
 	// Outputs contains the resolved output values from this plane
 	// +optional
 	Outputs map[string]string `json:"outputs,omitempty"`
@@ -105,6 +109,8 @@ type ClusterPlaneStatus struct {
 // +kubebuilder:resource:categories={oam,cluster},shortName=cp
 // +kubebuilder:printcolumn:name="PHASE",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="REVISION",type=string,JSONPath=`.status.currentRevision.version`
+// +kubebuilder:printcolumn:name="HEALTHY",type=string,JSONPath=`.status.healthSummary.overallHealthy`
+// +kubebuilder:printcolumn:name="COMPONENTS",type=integer,JSONPath=`.status.healthSummary.totalComponents`
 // +kubebuilder:printcolumn:name="AGE",type=date,JSONPath=".metadata.creationTimestamp"
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

@@ -35,6 +35,9 @@ const (
 	// PlanePhaseRunning means the plane is actively being used
 	PlanePhaseRunning PlanePhase = "Running"
 
+	// PlanePhaseDegraded means some components are unhealthy but plane is functional
+	PlanePhaseDegraded PlanePhase = "Degraded"
+
 	// PlanePhaseSuspended means the plane reconciliation is suspended
 	PlanePhaseSuspended PlanePhase = "Suspended"
 
@@ -181,10 +184,41 @@ type ClusterReference struct {
 	SyncedAt string `json:"syncedAt,omitempty"`
 }
 
+// PlaneComponentPhase represents the phase of a component within a ClusterPlane
+type PlaneComponentPhase string
+
+const (
+	// ComponentPhasePending means the component is waiting to be deployed
+	ComponentPhasePending PlaneComponentPhase = "Pending"
+
+	// ComponentPhaseDeploying means the component is being deployed
+	ComponentPhaseDeploying PlaneComponentPhase = "Deploying"
+
+	// ComponentPhaseRunning means the component is running and healthy
+	ComponentPhaseRunning PlaneComponentPhase = "Running"
+
+	// ComponentPhaseDegraded means the component is running but not fully healthy
+	ComponentPhaseDegraded PlaneComponentPhase = "Degraded"
+
+	// ComponentPhaseFailed means the component deployment or health check failed
+	ComponentPhaseFailed PlaneComponentPhase = "Failed"
+
+	// ComponentPhaseUnknown means the component status cannot be determined
+	ComponentPhaseUnknown PlaneComponentPhase = "Unknown"
+)
+
 // ComponentHealthStatus represents the health status of a component
 type ComponentHealthStatus struct {
 	// Name is the component name
 	Name string `json:"name"`
+
+	// Type is the component type (e.g., helm, kustomize)
+	// +optional
+	Type string `json:"type,omitempty"`
+
+	// Phase represents the current lifecycle phase of the component
+	// +optional
+	Phase PlaneComponentPhase `json:"phase,omitempty"`
 
 	// Healthy indicates if the component is healthy
 	Healthy bool `json:"healthy"`
@@ -192,4 +226,54 @@ type ComponentHealthStatus struct {
 	// Message provides additional health information
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// Reason provides a machine-readable reason for the current status
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// LastTransitionTime is the timestamp of the last status transition
+	// +optional
+	LastTransitionTime *string `json:"lastTransitionTime,omitempty"`
+
+	// TraitStatuses records the status of traits attached to this component
+	// +optional
+	TraitStatuses []TraitHealthStatus `json:"traitStatuses,omitempty"`
+
+	// Details contains additional status details as key-value pairs
+	// +optional
+	Details map[string]string `json:"details,omitempty"`
+}
+
+// TraitHealthStatus represents the health status of a trait
+type TraitHealthStatus struct {
+	// Type is the trait type
+	Type string `json:"type"`
+
+	// Healthy indicates if the trait is healthy
+	Healthy bool `json:"healthy"`
+
+	// Message provides additional health information
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// PlaneHealthSummary provides an aggregate view of plane health
+type PlaneHealthSummary struct {
+	// TotalComponents is the total number of components
+	TotalComponents int `json:"totalComponents"`
+
+	// HealthyComponents is the number of healthy components
+	HealthyComponents int `json:"healthyComponents"`
+
+	// DegradedComponents is the number of degraded components
+	DegradedComponents int `json:"degradedComponents"`
+
+	// FailedComponents is the number of failed components
+	FailedComponents int `json:"failedComponents"`
+
+	// PendingComponents is the number of pending components
+	PendingComponents int `json:"pendingComponents"`
+
+	// OverallHealthy indicates if the plane is considered healthy overall
+	OverallHealthy bool `json:"overallHealthy"`
 }

@@ -93,6 +93,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	now := metav1.Now()
 	plane.Status.LastUpdated = &now
 
+	// Reconcile component statuses from spec
+	ReconcileComponentStatuses(&plane)
+
 	// Handle revision creation if publishVersion is set
 	if _, hasPublish := plane.Annotations[AnnotationPublishVersion]; hasPublish {
 		if err := r.reconcileRevision(ctx, &plane); err != nil {
@@ -127,6 +130,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	metrics.ClusterPlanePhase.WithLabelValues(req.Namespace, req.Name).Set(phaseToMetricValue(phase))
 	metrics.ClusterPlaneComponentCount.WithLabelValues(req.Namespace, req.Name).Set(float64(len(plane.Spec.Components)))
 
+	// Update component health metrics
+	if plane.Status.HealthSummary != nil {
+		summary := plane.Status.HealthSummary
+		metrics.ClusterPlaneHealthyComponents.WithLabelValues(req.Namespace, req.Name).Set(float64(summary.HealthyComponents))
+		metrics.ClusterPlaneDegradedComponents.WithLabelValues(req.Namespace, req.Name).Set(float64(summary.DegradedComponents))
+		metrics.ClusterPlaneFailedComponents.WithLabelValues(req.Namespace, req.Name).Set(float64(summary.FailedComponents))
+		metrics.ClusterPlanePendingComponents.WithLabelValues(req.Namespace, req.Name).Set(float64(summary.PendingComponents))
+		if summary.OverallHealthy {
+			metrics.ClusterPlaneOverallHealthy.WithLabelValues(req.Namespace, req.Name).Set(1)
+		} else {
+			metrics.ClusterPlaneOverallHealthy.WithLabelValues(req.Namespace, req.Name).Set(0)
+		}
+	}
+
 	// Set conditions based on phase
 	switch phase {
 	case v1alpha1.PlanePhaseDraft:
@@ -159,6 +176,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			LastTransitionTime: now,
 			Reason:             "AllComponentsHealthy",
 			Message:            "All components are healthy.",
+		})
+	case v1alpha1.PlanePhaseDegraded:
+		plane.SetConditions(condition.Condition{
+			Type:               ConditionTypeReconciled,
+			Status:             "True",
+			LastTransitionTime: now,
+			Reason:             "Degraded",
+			Message:            "ClusterPlane is degraded - some components are unhealthy.",
+		})
+		plane.SetConditions(condition.Condition{
+			Type:               ConditionTypeHealthy,
+			Status:             "False",
+			LastTransitionTime: now,
+			Reason:             "ComponentsDegraded",
+			Message:            "Some components are not healthy.",
 		})
 	case v1alpha1.PlanePhaseFailed:
 		plane.SetConditions(condition.Condition{
@@ -295,10 +327,12 @@ func phaseToMetricValue(phase v1alpha1.PlanePhase) float64 {
 		return 1
 	case v1alpha1.PlanePhaseRunning:
 		return 2
-	case v1alpha1.PlanePhaseSuspended:
+	case v1alpha1.PlanePhaseDegraded:
 		return 3
-	case v1alpha1.PlanePhaseFailed:
+	case v1alpha1.PlanePhaseSuspended:
 		return 4
+	case v1alpha1.PlanePhaseFailed:
+		return 5
 	default:
 		return -1
 	}
