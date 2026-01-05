@@ -80,12 +80,42 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// ClusterPlane was deleted, clean up metrics
 		metrics.ClusterPlanePhase.DeleteLabelValues(req.Namespace, req.Name)
 		metrics.ClusterPlaneComponentCount.DeleteLabelValues(req.Namespace, req.Name)
+		metrics.ClusterPlaneRevisionCount.DeleteLabelValues(req.Namespace, req.Name)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	// Update observedGeneration
 	if plane.Status.ObservedGeneration != plane.Generation {
 		plane.Status.ObservedGeneration = plane.Generation
+	}
+
+	// Set current time for status updates
+	now := metav1.Now()
+	plane.Status.LastUpdated = &now
+
+	// Handle revision creation if publishVersion is set
+	if _, hasPublish := plane.Annotations[AnnotationPublishVersion]; hasPublish {
+		if err := r.reconcileRevision(ctx, &plane); err != nil {
+			klog.ErrorS(err, "Failed to reconcile revision",
+				"clusterPlane", klog.KRef(req.Namespace, req.Name))
+			metrics.ClusterPlaneReconcileErrors.WithLabelValues(req.Namespace, req.Name, "revision").Inc()
+
+			// Set failed phase and condition
+			plane.Status.Phase = v1alpha1.PlanePhaseFailed
+			plane.SetConditions(condition.Condition{
+				Type:               ConditionTypeReconciled,
+				Status:             "False",
+				LastTransitionTime: now,
+				Reason:             "RevisionError",
+				Message:            err.Error(),
+			})
+
+			// Update status even on error to reflect failure
+			if statusErr := r.UpdateStatus(ctx, &plane); statusErr != nil {
+				klog.ErrorS(statusErr, "Failed to update status after revision error")
+			}
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Determine phase based on annotations and current state
@@ -98,9 +128,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	metrics.ClusterPlaneComponentCount.WithLabelValues(req.Namespace, req.Name).Set(float64(len(plane.Spec.Components)))
 
 	// Set conditions based on phase
-	now := metav1.Now()
-	plane.Status.LastUpdated = &now
-
 	switch phase {
 	case v1alpha1.PlanePhaseDraft:
 		plane.SetConditions(condition.Condition{
@@ -109,6 +136,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			LastTransitionTime: now,
 			Reason:             "Draft",
 			Message:            "ClusterPlane is in draft mode. Add plane.oam.dev/publishVersion annotation to publish.",
+		})
+	case v1alpha1.PlanePhasePublishing:
+		plane.SetConditions(condition.Condition{
+			Type:               ConditionTypeReconciled,
+			Status:             "True",
+			LastTransitionTime: now,
+			Reason:             "Publishing",
+			Message:            "ClusterPlane revision is being created.",
 		})
 	case v1alpha1.PlanePhaseRunning:
 		plane.SetConditions(condition.Condition{
@@ -157,9 +192,34 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		"clusterPlane", klog.KRef(req.Namespace, req.Name),
 		"phase", phase,
 		"components", len(plane.Spec.Components),
+		"currentRevision", plane.Status.CurrentRevision,
 		"duration", time.Since(startTime))
 
 	return ctrl.Result{}, nil
+}
+
+// reconcileRevision handles the creation of ClusterPlaneRevision
+func (r *Reconciler) reconcileRevision(ctx context.Context, plane *v1alpha1.ClusterPlane) error {
+	// Use the revision management logic
+	revision, isNew, err := ReconcilePlaneRevision(ctx, r.Client, r.Recorder, plane, r.revisionLimit)
+	if err != nil {
+		return err
+	}
+
+	// Update status with current revision reference
+	if revision != nil {
+		plane.Status.CurrentRevision = GetRevisionReference(revision)
+		plane.Status.RevisionCount++
+
+		if isNew {
+			klog.InfoS("Created new ClusterPlaneRevision",
+				"clusterPlane", klog.KRef(plane.Namespace, plane.Name),
+				"revision", revision.Name,
+				"version", revision.Spec.PlaneSnapshot.Version)
+		}
+	}
+
+	return nil
 }
 
 // determinePhase determines the phase of the ClusterPlane based on its current state
