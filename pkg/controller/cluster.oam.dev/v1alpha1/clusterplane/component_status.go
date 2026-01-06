@@ -241,6 +241,12 @@ func SetTraitStatus(plane *v1alpha1.ClusterPlane, componentName, traitType strin
 	})
 }
 
+// RecalculateHealthSummary recalculates and updates the health summary
+// This is useful after updating individual component statuses
+func RecalculateHealthSummary(plane *v1alpha1.ClusterPlane) {
+	plane.Status.HealthSummary = CalculateHealthSummary(plane)
+}
+
 // SetComponentDetail sets a detail key-value pair for a component
 func SetComponentDetail(plane *v1alpha1.ClusterPlane, componentName, key, value string) {
 	cs := GetComponentStatus(plane, componentName)

@@ -89,8 +89,12 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	r = Reconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		InputResolver:   NewInputResolver(mgr.GetClient()),
+		OutputResolver:  NewOutputResolver(mgr.GetClient()),
+		Renderer:        NewCompositeRenderer(),
+		ResourceManager: NewPlaneResourceManager(mgr.GetClient()),
 		options: options{
 			concurrentReconciles: 1,
 			revisionLimit:        defRevisionLimit,

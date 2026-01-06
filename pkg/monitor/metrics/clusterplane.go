@@ -180,6 +180,56 @@ var (
 		Name: "kubevela_clusterplane_output_resolution_errors_total",
 		Help: "Total number of output resolution errors.",
 	}, []string{"namespace", "name", "output_name", "component"})
+
+	// ClusterPlaneRenderDuration reports the duration of component rendering
+	ClusterPlaneRenderDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kubevela_clusterplane_render_duration_seconds",
+		Help:    "ClusterPlane component rendering duration in seconds.",
+		Buckets: velametrics.FineGrainedBuckets,
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneDispatchDuration reports the duration of resource dispatch
+	ClusterPlaneDispatchDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kubevela_clusterplane_dispatch_duration_seconds",
+		Help:    "ClusterPlane resource dispatch duration in seconds.",
+		Buckets: velametrics.FineGrainedBuckets,
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneResourcesManaged reports the total number of managed resources
+	ClusterPlaneResourcesManaged = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kubevela_clusterplane_resources_managed",
+		Help: "Total number of resources managed by a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneResourcesCreated reports the total number of resources created
+	ClusterPlaneResourcesCreated = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubevela_clusterplane_resources_created_total",
+		Help: "Total number of resources created by a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneResourcesUpdated reports the total number of resources updated
+	ClusterPlaneResourcesUpdated = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubevela_clusterplane_resources_updated_total",
+		Help: "Total number of resources updated by a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneResourcesDeleted reports the total number of resources garbage collected
+	ClusterPlaneResourcesDeleted = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubevela_clusterplane_resources_deleted_total",
+		Help: "Total number of resources garbage collected by a ClusterPlane.",
+	}, []string{"namespace", "name"})
+
+	// ClusterPlaneRenderErrors reports the number of component render errors
+	ClusterPlaneRenderErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubevela_clusterplane_render_errors_total",
+		Help: "Total number of component rendering errors.",
+	}, []string{"namespace", "name", "component"})
+
+	// ClusterPlaneDispatchErrors reports the number of resource dispatch errors
+	ClusterPlaneDispatchErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kubevela_clusterplane_dispatch_errors_total",
+		Help: "Total number of resource dispatch errors.",
+	}, []string{"namespace", "name", "resource_kind"})
 )
 
 var registerClusterPlaneMetricsOnce sync.Once
@@ -213,6 +263,15 @@ func RegisterClusterPlaneMetrics() {
 			ClusterPlaneOutputsResolved,
 			ClusterPlaneOutputsFailed,
 			ClusterPlaneOutputResolutionErrors,
+			// Rendering and dispatch metrics
+			ClusterPlaneRenderDuration,
+			ClusterPlaneDispatchDuration,
+			ClusterPlaneResourcesManaged,
+			ClusterPlaneResourcesCreated,
+			ClusterPlaneResourcesUpdated,
+			ClusterPlaneResourcesDeleted,
+			ClusterPlaneRenderErrors,
+			ClusterPlaneDispatchErrors,
 		)
 	})
 }

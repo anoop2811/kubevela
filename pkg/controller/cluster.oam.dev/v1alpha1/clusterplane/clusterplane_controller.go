@@ -23,6 +23,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/event"
 	ctrlrec "github.com/kubevela/pkg/controller/reconciler"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
@@ -56,10 +57,12 @@ const ConditionTypeOutputsResolved condition.ConditionType = "OutputsResolved"
 // Reconciler reconciles a ClusterPlane object
 type Reconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	Recorder       event.Recorder
-	InputResolver  *InputResolver
-	OutputResolver *OutputResolver
+	Scheme          *runtime.Scheme
+	Recorder        event.Recorder
+	InputResolver   *InputResolver
+	OutputResolver  *OutputResolver
+	Renderer        *CompositeRenderer
+	ResourceManager *PlaneResourceManager
 	options
 }
 
@@ -157,6 +160,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				Reason:             "AllInputsResolved",
 				Message:            "All cross-cluster inputs resolved successfully",
 			})
+		}
+	}
+
+	// Render and dispatch components when the plane is published
+	if _, hasPublish := plane.Annotations[AnnotationPublishVersion]; hasPublish && len(plane.Spec.Components) > 0 {
+		renderErr := r.renderAndDispatchComponents(ctx, &plane)
+		if renderErr != nil {
+			klog.ErrorS(renderErr, "Failed to render and dispatch components",
+				"clusterPlane", klog.KRef(req.Namespace, req.Name))
+			metrics.ClusterPlaneReconcileErrors.WithLabelValues(req.Namespace, req.Name, "rendering").Inc()
+			// Continue to update status even if rendering fails
 		}
 	}
 
@@ -420,11 +434,13 @@ func Setup(mgr ctrl.Manager, args oamctrl.Args) error {
 	metrics.RegisterClusterPlaneMetrics()
 
 	r := Reconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		InputResolver:  NewInputResolver(mgr.GetClient()),
-		OutputResolver: NewOutputResolver(mgr.GetClient()),
-		options:        parseOptions(args),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		InputResolver:   NewInputResolver(mgr.GetClient()),
+		OutputResolver:  NewOutputResolver(mgr.GetClient()),
+		Renderer:        NewCompositeRenderer(),
+		ResourceManager: NewPlaneResourceManager(mgr.GetClient()),
+		options:         parseOptions(args),
 	}
 	return r.SetupWithManager(mgr)
 }
@@ -438,6 +454,174 @@ func parseOptions(args oamctrl.Args) options {
 		concurrentReconciles: args.ConcurrentReconciles,
 		revisionLimit:        revLimit,
 	}
+}
+
+// renderAndDispatchComponents renders all components and dispatches them to the cluster
+func (r *Reconciler) renderAndDispatchComponents(ctx context.Context, plane *v1alpha1.ClusterPlane) error {
+	renderStartTime := time.Now()
+
+	// Render all components
+	renderResults := r.Renderer.RenderAll(ctx, plane)
+
+	// Record render duration
+	metrics.ClusterPlaneRenderDuration.WithLabelValues(plane.Namespace, plane.Name).
+		Observe(time.Since(renderStartTime).Seconds())
+
+	// Collect all rendered resources
+	var allResources []*unstructured.Unstructured
+	var renderErrors []error
+
+	for i, result := range renderResults {
+		if result.Error != nil {
+			renderErrors = append(renderErrors, result.Error)
+			// Track render errors per component
+			metrics.ClusterPlaneRenderErrors.WithLabelValues(plane.Namespace, plane.Name, result.ComponentName).Inc()
+			// Update component status to Failed
+			if i < len(plane.Status.ComponentHealth) {
+				plane.Status.ComponentHealth[i].Phase = v1alpha1.ComponentPhaseFailed
+				plane.Status.ComponentHealth[i].Healthy = false
+				plane.Status.ComponentHealth[i].Message = result.Error.Error()
+				plane.Status.ComponentHealth[i].Reason = "RenderError"
+			}
+			continue
+		}
+		allResources = append(allResources, result.Resources...)
+
+		// Update component status to Deploying
+		if i < len(plane.Status.ComponentHealth) {
+			plane.Status.ComponentHealth[i].Phase = v1alpha1.ComponentPhaseDeploying
+		}
+	}
+
+	if len(renderErrors) > 0 {
+		klog.ErrorS(nil, "Some components failed to render",
+			"clusterPlane", klog.KRef(plane.Namespace, plane.Name),
+			"errorCount", len(renderErrors))
+	}
+
+	// Dispatch resources to cluster
+	dispatchStartTime := time.Now()
+	dispatchResults, dispatchErr := r.ResourceManager.DispatchResources(ctx, plane, allResources)
+
+	// Record dispatch duration
+	metrics.ClusterPlaneDispatchDuration.WithLabelValues(plane.Namespace, plane.Name).
+		Observe(time.Since(dispatchStartTime).Seconds())
+
+	if dispatchErr != nil {
+		return dispatchErr
+	}
+
+	// Track dispatch results in metrics
+	var created, updated int
+	for _, dr := range dispatchResults {
+		if dr.Error != nil {
+			resourceKind := "unknown"
+			if dr.Resource != nil {
+				resourceKind = dr.Resource.GetKind()
+			}
+			metrics.ClusterPlaneDispatchErrors.WithLabelValues(plane.Namespace, plane.Name, resourceKind).Inc()
+		} else {
+			if dr.Created {
+				created++
+			}
+			if dr.Updated {
+				updated++
+			}
+		}
+	}
+	if created > 0 {
+		metrics.ClusterPlaneResourcesCreated.WithLabelValues(plane.Namespace, plane.Name).Add(float64(created))
+	}
+	if updated > 0 {
+		metrics.ClusterPlaneResourcesUpdated.WithLabelValues(plane.Namespace, plane.Name).Add(float64(updated))
+	}
+
+	// Update component health based on dispatch results
+	r.updateComponentHealthFromDispatch(plane, renderResults, dispatchResults)
+
+	// Garbage collect resources no longer in spec
+	if err := r.ResourceManager.GarbageCollect(ctx, plane, allResources); err != nil {
+		klog.ErrorS(err, "Failed to garbage collect resources",
+			"clusterPlane", klog.KRef(plane.Namespace, plane.Name))
+		// Don't return error - GC failure shouldn't block reconciliation
+	}
+
+	// Update ResourceTracker reference in status and managed resources count
+	rtName := GetResourceTrackerName(plane)
+	plane.Status.ResourceTrackerRef = &v1alpha1.ResourceTrackerReference{
+		Name: rtName,
+	}
+	metrics.ClusterPlaneResourcesManaged.WithLabelValues(plane.Namespace, plane.Name).Set(float64(len(allResources)))
+
+	klog.InfoS("Rendered and dispatched components",
+		"clusterPlane", klog.KRef(plane.Namespace, plane.Name),
+		"components", len(plane.Spec.Components),
+		"resources", len(allResources),
+		"created", created,
+		"updated", updated,
+		"duration", time.Since(renderStartTime))
+
+	if len(renderErrors) > 0 {
+		return renderErrors[0] // Return first error for status
+	}
+	return nil
+}
+
+// updateComponentHealthFromDispatch updates component health based on dispatch results
+func (r *Reconciler) updateComponentHealthFromDispatch(plane *v1alpha1.ClusterPlane, renderResults []RenderResult, dispatchResults []DispatchResult) {
+	// Map dispatch results by resource key
+	dispatchByKey := make(map[string]DispatchResult)
+	for _, dr := range dispatchResults {
+		if dr.Resource != nil {
+			key := resourceKey(dr.Resource)
+			dispatchByKey[key] = dr
+		}
+	}
+
+	// Update component health based on their resources
+	for i, rr := range renderResults {
+		if i >= len(plane.Status.ComponentHealth) {
+			continue
+		}
+
+		if rr.Error != nil {
+			// Already handled in render phase
+			continue
+		}
+
+		allDeployed := true
+		var componentErrors []string
+
+		for _, resource := range rr.Resources {
+			key := resourceKey(resource)
+			if dr, ok := dispatchByKey[key]; ok {
+				if dr.Error != nil {
+					allDeployed = false
+					componentErrors = append(componentErrors, dr.Error.Error())
+				}
+			}
+		}
+
+		nowStr := time.Now().Format(time.RFC3339)
+		if allDeployed {
+			plane.Status.ComponentHealth[i].Phase = v1alpha1.ComponentPhaseRunning
+			plane.Status.ComponentHealth[i].Healthy = true
+			plane.Status.ComponentHealth[i].Reason = "Deployed"
+			plane.Status.ComponentHealth[i].Message = "Component resources deployed successfully"
+			plane.Status.ComponentHealth[i].LastTransitionTime = &nowStr
+		} else {
+			plane.Status.ComponentHealth[i].Phase = v1alpha1.ComponentPhaseFailed
+			plane.Status.ComponentHealth[i].Healthy = false
+			plane.Status.ComponentHealth[i].Reason = "DispatchError"
+			if len(componentErrors) > 0 {
+				plane.Status.ComponentHealth[i].Message = componentErrors[0]
+			}
+			plane.Status.ComponentHealth[i].LastTransitionTime = &nowStr
+		}
+	}
+
+	// Update health summary
+	RecalculateHealthSummary(plane)
 }
 
 // phaseToMetricValue converts a PlanePhase to a numeric value for metrics
